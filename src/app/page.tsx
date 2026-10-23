@@ -58,7 +58,11 @@ import { CustomBraceletStudio } from "@/components/CustomBraceletStudio";
 import { ReceiptBraceletBand } from "@/components/ReceiptBraceletBand";
 import { getCharmCode, generateUniqueCharmCode } from "@/data/charms";
 
-const ADMIN_PASSWORD = "Sompheareakshop1234";
+const VALID_PASSWORDS = [
+  "Sompheareakshop1234",
+  "Sompheareak.com-Admin04/10/2026-Ming",
+  process.env.NEXT_PUBLIC_ADMIN_PIN,
+].filter(Boolean) as string[];
 
 const PRESET_TOY_IMAGES = [
   { label: "Cyber Mecha", url: "https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80" },
@@ -252,7 +256,7 @@ export default function AdminPage() {
 
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (passwordInput === ADMIN_PASSWORD) {
+    if (VALID_PASSWORDS.includes(passwordInput.trim())) {
       sounds.playFanfare();
       sessionStorage.setItem("somphea_admin_auth", "true");
       setIsAuthenticated(true);
