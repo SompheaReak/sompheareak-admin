@@ -100,5 +100,66 @@
       "actionValue": "toy-universe"
     }
   ],
-  "categories": []
+  "categories": [
+    {
+      "en": "All Toys",
+      "id": "all",
+      "kh": "ទាំងអស់",
+      "grad": "from-indigo-500 via-purple-500 to-pink-500",
+      "icon": "✨",
+      "name": "All Toys",
+      "sort_order": 0,
+      "description": "Browse the complete Somphea Reak toy universe and custom collections."
+    },
+    {
+      "en": "Minifigure Arcade",
+      "id": "minifigure",
+      "kh": "តុក្កតាមីនី Minifigure",
+      "grad": "from-cyan-400 to-blue-600",
+      "icon": "🧸",
+      "name": "Minifigure Arcade",
+      "sort_order": 1,
+      "description": "Collectible mini figures, superheroes, anime legends, and building heroes."
+    },
+    {
+      "en": "Mystery Blind Box",
+      "id": "blind-box",
+      "kh": "ប្រអប់អាថ៌កំបាំង Blind Box",
+      "grad": "from-pink-500 to-rose-600",
+      "icon": "🎁",
+      "name": "Mystery Blind Box",
+      "sort_order": 2,
+      "description": "Exciting mystery unboxing series with super rare secret editions to discover!"
+    },
+    {
+      "en": "Tech Toys & RC",
+      "id": "toy-universe",
+      "kh": "ប្រដាប់ក្មេងលេងបច្ចេកវិទ្យា & ឡានបញ្ជា",
+      "grad": "from-amber-400 to-orange-600",
+      "icon": "🪀",
+      "name": "Tech Toys & RC",
+      "sort_order": 3,
+      "description": "Interactive robots, wall-climbing racers, LED drones, and STEM gadgets."
+    },
+    {
+      "en": "Italy Modular Charm",
+      "id": "bracelet",
+      "kh": "ខ្សែដៃម៉ូឌុលអ៊ីតាលី Italy Charm",
+      "grad": "from-emerald-400 to-teal-600",
+      "icon": "📿",
+      "name": "Italy Modular Charm",
+      "sort_order": 4,
+      "description": "Craft your unique custom bracelet with stainless steel Italian charm links."
+    },
+    {
+      "en": "Galaxy Plushies",
+      "id": "plushies",
+      "kh": "តុក្កតាសំឡីទន់ៗ Plushies",
+      "grad": "from-purple-400 to-indigo-600",
+      "icon": "🦄",
+      "name": "Galaxy Plushies",
+      "sort_order": 5,
+      "description": "Ultra-soft premium cuddly plushies, anime squishies, and bedtime companions."
+    }
+  ]
 }
