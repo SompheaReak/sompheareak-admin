@@ -547,18 +547,16 @@ export default function AdminPage() {
         img.onload = () => {
           const nw = img.naturalWidth || img.width;
           const nh = img.naturalHeight || img.height;
-          if (nw <= maxDim && nh <= maxDim) {
-            resolve(dataUrl);
-            return;
-          }
           let w = nw;
           let h = nh;
-          if (w > h) {
-            h = Math.max(1, Math.round((h * maxDim) / w));
-            w = maxDim;
-          } else {
-            w = Math.max(1, Math.round((w * maxDim) / h));
-            h = maxDim;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.max(1, Math.round((h * maxDim) / w));
+              w = maxDim;
+            } else {
+              w = Math.max(1, Math.round((w * maxDim) / h));
+              h = maxDim;
+            }
           }
           const canvas = document.createElement("canvas");
           canvas.width = w;
@@ -571,8 +569,9 @@ export default function AdminPage() {
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = "high";
           ctx.drawImage(img, 0, 0, w, h);
-          const isPng = file.type === "image/png";
-          const resized = isPng ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", quality);
+          // For charm icons (<= 480px), allow PNG to preserve alpha transparency; otherwise compress to JPEG
+          const isPngCharm = file.type === "image/png" && maxDim <= 480;
+          const resized = isPngCharm ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", quality);
           resolve(resized);
         };
         img.onerror = () => resolve(dataUrl);
@@ -916,17 +915,13 @@ export default function AdminPage() {
     }
   };
 
-  const handleBoxImageUpload = (file: File) => {
+  const handleBoxImageUpload = async (file: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const result = e.target?.result as string;
-      if (result) {
-        setBImage(result);
-        sounds.playPop();
-      }
-    };
-    reader.readAsDataURL(file);
+    const resized = await resizeImageFile(file, 800, 0.82);
+    if (resized) {
+      setBImage(resized);
+      sounds.playPop();
+    }
   };
 
   // Filtered Orders
