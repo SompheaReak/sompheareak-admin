@@ -5,99 +5,100 @@
   "vouchers": [
     {
       "code": "TOY15",
-      "discountType": "fixed",
-      "fixedDiscountUsd": 1.5,
-      "discountPct": 0,
-      "pointsCost": 15,
-      "minSpend": 5,
-      "description": "$1.50 OFF Starter Voucher",
-      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ $1.50 (ចាប់ពី $5 ឡើង)",
       "badge": "STARTER TIER",
-      "colorGrad": "from-blue-500 to-cyan-500"
+      "minSpend": 5,
+      "colorGrad": "from-blue-500 to-cyan-500",
+      "pointsCost": 15,
+      "description": "$1.50 OFF Starter Voucher",
+      "discountPct": 0,
+      "discountType": "fixed",
+      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ $1.50 (ចាប់ពី $5 ឡើង)",
+      "fixedDiscountUsd": 1.5
     },
     {
       "code": "VIP10OFF",
-      "discountType": "percentage",
-      "discountPct": 10,
-      "pointsCost": 25,
-      "minSpend": 0,
-      "description": "10% OFF VIP Collector Voucher",
-      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 10% សម្រាប់សមាជិក VIP",
       "badge": "POPULAR TIER",
-      "colorGrad": "from-purple-500 to-indigo-600"
+      "minSpend": 0,
+      "colorGrad": "from-purple-500 to-indigo-600",
+      "pointsCost": 25,
+      "description": "10% OFF VIP Collector Voucher",
+      "discountPct": 10,
+      "discountType": "percentage",
+      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 10% សម្រាប់សមាជិក VIP"
     },
     {
       "code": "SUPER15",
-      "discountType": "percentage",
-      "discountPct": 15,
-      "pointsCost": 40,
-      "minSpend": 15,
-      "description": "15% OFF Super Toy Gamer Voucher",
-      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 15% (ការកុម្ម៉ង់លើស $15)",
       "badge": "GOLD TIER",
-      "colorGrad": "from-amber-400 to-orange-500"
+      "minSpend": 15,
+      "colorGrad": "from-amber-400 to-orange-500",
+      "pointsCost": 40,
+      "description": "15% OFF Super Toy Gamer Voucher",
+      "discountPct": 15,
+      "discountType": "percentage",
+      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 15% (ការកុម្ម៉ង់លើស $15)"
     },
     {
       "code": "CHAMP25",
-      "discountType": "percentage",
-      "discountPct": 25,
-      "pointsCost": 60,
-      "minSpend": 25,
-      "description": "25% OFF Master Champion Voucher + Free Gift",
-      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 25% + កាដូពិសេស",
       "badge": "CHAMPION TIER",
-      "colorGrad": "from-rose-500 to-pink-600"
+      "minSpend": 25,
+      "colorGrad": "from-rose-500 to-pink-600",
+      "pointsCost": 60,
+      "description": "25% OFF Master Champion Voucher + Free Gift",
+      "discountPct": 25,
+      "discountType": "percentage",
+      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 25% + កាដូពិសេស"
     }
   ],
   "notifications": [],
   "storefrontConfig": {
-    "announcementText": "🚀 VIRAL TOY DROP: FLASH SALE UP TO 30% OFF · FREE PHNOM PENH DELIVERY OVER $25! 🇰🇭",
     "heroBadge": "🔥 TOP DROPS OF 2026",
-    "heroTitlePrefix": "THE ULTIMATE",
-    "heroTitleHighlight": "TOY & CHARM",
-    "heroTitleSuffix": "UNIVERSE",
     "heroSubtitle": "Explore viral minifigures, anti-gravity RC racers, surprise blind boxes, and genuine Italian modular stainless steel charm bracelets.",
+    "heroTitlePrefix": "THE ULTIMATE",
+    "heroTitleSuffix": "UNIVERSE",
+    "announcementText": "🚀 VIRAL TOY DROP: FLASH SALE UP TO 30% OFF · FREE PHNOM PENH DELIVERY OVER $25! 🇰🇭",
+    "heroTitleHighlight": "TOY & CHARM",
     "freeDeliveryThreshold": 25
   },
   "categoryBoxes": [
     {
       "id": "box-italy-bracelet",
-      "title": "CUSTOMIZE ITALY CHARM",
-      "titleKh": "រចនាខ្សែដៃអ៊ីតាលី Italy Charm",
-      "subtitle": "316L Surgical Inox · 3D Live Studio",
-      "image": "/assets/categories/custom-bracelet.jpg",
-      "actionType": "link",
-      "actionValue": "/italy-bracelet",
       "span": "full",
       "badge": "STUDIO 🔗",
+      "image": "/assets/categories/custom-bracelet.jpg",
       "order": 1,
-      "active": true
+      "title": "CUSTOMIZE ITALY CHARM",
+      "active": true,
+      "titleKh": "រចនាខ្សែដៃអ៊ីតាលី Italy Charm",
+      "subtitle": "316L Surgical Inox · 3D Live Studio",
+      "actionType": "link",
+      "actionValue": "/italy-bracelet"
     },
     {
       "id": "box-minifigure",
-      "title": "MINIFIGURE",
-      "titleKh": "តុក្កតាមីនី Minifigure",
-      "subtitle": "Anime & Superhero Legends",
-      "image": "/assets/categories/minifigure.jpg",
-      "actionType": "category",
-      "actionValue": "minifigure",
       "span": "half",
       "badge": "VIRAL 🔥",
+      "image": "/assets/categories/minifigure.jpg",
       "order": 2,
-      "active": true
+      "title": "MINIFIGURE",
+      "active": true,
+      "titleKh": "តុក្កតាមីនី Minifigure",
+      "subtitle": "Anime & Superhero Legends",
+      "actionType": "category",
+      "actionValue": "minifigure"
     },
     {
       "id": "box-toy",
-      "title": "TOY",
-      "titleKh": "ប្រដាប់ក្មេងលេង Toys & RC",
-      "subtitle": "Tech Toys, Speed Racers & STEM",
-      "image": "/assets/categories/toy.jpg",
-      "actionType": "category",
-      "actionValue": "toy-universe",
       "span": "half",
       "badge": "TRENDING ⚡",
+      "image": "/assets/categories/toy.jpg",
       "order": 3,
-      "active": true
+      "title": "TOY",
+      "active": true,
+      "titleKh": "ប្រដាប់ក្មេងលេង Toys & RC",
+      "subtitle": "Tech Toys, Speed Racers & STEM",
+      "actionType": "category",
+      "actionValue": "toy-universe"
     }
-  ]
+  ],
+  "categories": []
 }
