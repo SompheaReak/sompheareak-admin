@@ -25,6 +25,7 @@ import { DEFAULT_CATEGORY_BOXES } from "@/data/categoryBoxes";
 import { CATEGORIES } from "@/data/categories";
 import { sounds } from "@/utils/audio";
 import confetti from "canvas-confetti";
+import { neonGetKey, neonSetKey } from "@/lib/neonClient";
 
 interface StoreContextType {
   currency: Currency;
@@ -406,119 +407,71 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           } catch {}
         }
 
-        // Fetch fresh database state from Testing Server API
-        fetch("/api/products")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && Array.isArray(d.data)) {
-              setProductsState(d.data);
+        // Fetch fresh database state directly from Neon PostgreSQL
+        const refreshFromNeon = () => {
+          neonGetKey<Product[]>("products", []).then((prods) => {
+            if (Array.isArray(prods)) {
+              setProductsState(prods);
+              safeSetItem("somphea_products", JSON.stringify(prods));
             }
-          })
-          .catch(() => {});
+          });
 
-        // Fetch Italy Modular Charms with guaranteed unique codes
-        const savedCharms = localStorage.getItem("somphea_charms");
-        if (savedCharms) {
-          try {
-            const parsed = JSON.parse(savedCharms);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              const unique = ensureUniqueCharmCodes(parsed);
+          neonGetKey<Charm[]>("charms", []).then((loadedCharms) => {
+            if (Array.isArray(loadedCharms)) {
+              const unique = ensureUniqueCharmCodes(loadedCharms);
               setCharmsState(unique);
               safeSetItem("somphea_charms", JSON.stringify(unique));
             }
-          } catch {}
-        }
-        fetch("/api/charms")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && Array.isArray(d.data) && d.data.length > 0) {
-              const unique = ensureUniqueCharmCodes(d.data);
-              setCharmsState(unique);
-              safeSetItem("somphea_charms", JSON.stringify(unique));
+          });
+
+          neonGetKey<CustomerOrder[]>("orders", []).then((loadedOrders) => {
+            if (Array.isArray(loadedOrders)) {
+              setOrdersState(hydrateOrdersFromStorage(loadedOrders, CHARMS));
+              safeSetItem("somphea_orders", JSON.stringify(compactOrdersForStorage(loadedOrders)));
             }
-          })
-          .catch(() => {});
+          });
 
-        // Orders Hydration
-        const savedOrders = localStorage.getItem("somphea_orders");
-        if (savedOrders) {
-          try {
-            const parsed = JSON.parse(savedOrders);
-            setOrdersState(hydrateOrdersFromStorage(parsed, CHARMS));
-          } catch {}
-        }
-
-        fetch("/api/orders")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && Array.isArray(d.data)) {
-              setOrdersState(hydrateOrdersFromStorage(d.data, CHARMS));
+          neonGetKey<Voucher[]>("vouchers", AVAILABLE_VOUCHERS).then((loadedVouchers) => {
+            if (Array.isArray(loadedVouchers)) {
+              setVouchersState(loadedVouchers);
             }
-          })
-          .catch(() => {});
+          });
 
-        fetch("/api/vouchers")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && Array.isArray(d.data)) {
-              setVouchersState(d.data);
+          neonGetKey<OrderNotification[]>("notifications", []).then((loadedNotifs) => {
+            if (Array.isArray(loadedNotifs)) {
+              setNotifications(loadedNotifs);
             }
-          })
-          .catch(() => {});
+          });
 
-        fetch("/api/notifications")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && Array.isArray(d.data)) {
-              setNotifications(d.data);
+          neonGetKey<StorefrontConfig>("storefrontConfig", DEFAULT_STOREFRONT_CONFIG).then((cfg) => {
+            if (cfg) {
+              setStorefrontConfig(cfg);
             }
-          })
-          .catch(() => {});
+          });
 
-        fetch("/api/store-config")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && d.data) {
-              setStorefrontConfig(d.data);
+          neonGetKey<CategoryBox[]>("categoryBoxes", DEFAULT_CATEGORY_BOXES).then((boxes) => {
+            if (Array.isArray(boxes) && boxes.length > 0) {
+              setCategoryBoxesState(boxes);
+              safeSetItem("somphea_category_boxes", JSON.stringify(boxes));
             }
-          })
-          .catch(() => {});
+          });
 
-        const savedBoxes = localStorage.getItem("somphea_category_boxes");
-        if (savedBoxes) {
-          try {
-            const parsed = JSON.parse(savedBoxes);
-            if (Array.isArray(parsed) && parsed.length > 0) setCategoryBoxesState(parsed);
-          } catch {}
-        }
-
-        fetch("/api/category-boxes")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && Array.isArray(d.categoryBoxes)) {
-              setCategoryBoxesState(d.categoryBoxes);
-              safeSetItem("somphea_category_boxes", JSON.stringify(d.categoryBoxes));
+          neonGetKey<Category[]>("categories", CATEGORIES).then((cats) => {
+            if (Array.isArray(cats) && cats.length > 0) {
+              setCategoriesState(cats);
+              safeSetItem("somphea_categories", JSON.stringify(cats));
             }
-          })
-          .catch(() => {});
+          });
+        };
 
-        const savedCategories = localStorage.getItem("somphea_categories");
-        if (savedCategories) {
-          try {
-            const parsed = JSON.parse(savedCategories);
-            if (Array.isArray(parsed) && parsed.length > 0) setCategoriesState(parsed);
-          } catch {}
-        }
+        refreshFromNeon();
+        window.addEventListener("focus", refreshFromNeon);
+        const pollInterval = setInterval(refreshFromNeon, 8000);
 
-        fetch("/api/categories")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.success && Array.isArray(d.categories) && d.categories.length > 0) {
-              setCategoriesState(d.categories);
-              safeSetItem("somphea_categories", JSON.stringify(d.categories));
-            }
-          })
-          .catch(() => {});
+        return () => {
+          window.removeEventListener("focus", refreshFromNeon);
+          clearInterval(pollInterval);
+        };
       }
     } catch {
       // ignore SSR or storage exceptions
@@ -760,7 +713,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [language]
   );
 
-  // Admin & Catalog Management with Testing Server DB Sync
+  // Admin & Catalog Management with Direct Neon DB Persistence
   const addProduct = useCallback((newProd: Omit<Product, "id">): Product => {
     const id = `toy-${Date.now()}`;
     const product: Product = { ...newProd, id };
@@ -768,10 +721,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setProductsState((prev) => {
       const updated = [product, ...prev];
       safeSetItem("somphea_products", JSON.stringify(updated));
+      neonSetKey("products", updated);
       return updated;
     });
 
-    // Sync to testing backend server
+    // Also notify API route
     fetch("/api/products", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -785,10 +739,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setProductsState((prev) => {
       const updated = prev.map((p) => (p.id === id ? { ...p, ...updates } : p));
       safeSetItem("somphea_products", JSON.stringify(updated));
+      neonSetKey("products", updated);
       return updated;
     });
 
-    // Sync to testing backend server
     fetch(`/api/products/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -800,6 +754,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setProductsState((prev) => {
       const updated = prev.filter((p) => p.id !== id);
       safeSetItem("somphea_products", JSON.stringify(updated));
+      neonSetKey("products", updated);
       return updated;
     });
 
@@ -809,6 +764,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const resetProducts = useCallback(() => {
     setProductsState(PRODUCTS);
     safeSetItem("somphea_products", JSON.stringify(PRODUCTS));
+    neonSetKey("products", PRODUCTS);
     fetch("/api/products", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -823,6 +779,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         localStorage.removeItem("somphea_products");
       } catch {}
     }
+    neonSetKey("products", []);
     fetch("/api/products", {
       method: "DELETE",
     }).catch(() => {});
@@ -837,6 +794,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCharmsState((prev) => {
       const updated = ensureUniqueCharmCodes([charm, ...prev]);
       safeSetItem("somphea_charms", JSON.stringify(updated));
+      neonSetKey("charms", updated);
       return updated;
     });
 
@@ -862,6 +820,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       );
       const guaranteed = ensureUniqueCharmCodes(updated);
       safeSetItem("somphea_charms", JSON.stringify(guaranteed));
+      neonSetKey("charms", guaranteed);
       return guaranteed;
     });
 
@@ -876,6 +835,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCharmsState((prev) => {
       const updated = prev.filter((c) => c.id !== id);
       safeSetItem("somphea_charms", JSON.stringify(updated));
+      neonSetKey("charms", updated);
       return updated;
     });
 
@@ -886,6 +846,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const unique = ensureUniqueCharmCodes(CHARMS);
     setCharmsState(unique);
     safeSetItem("somphea_charms", JSON.stringify(unique));
+    neonSetKey("charms", unique);
     fetch("/api/charms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -896,6 +857,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const clearCharms = useCallback(() => {
     setCharmsState([]);
     safeSetItem("somphea_charms", JSON.stringify([]));
+    neonSetKey("charms", []);
     fetch("/api/charms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -943,7 +905,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
         return o;
       });
-      safeSetItem("somphea_orders", JSON.stringify(compactOrdersForStorage(updated)));
+      const compacted = compactOrdersForStorage(updated);
+      safeSetItem("somphea_orders", JSON.stringify(compacted));
+      neonSetKey("orders", compacted);
       return updated;
     });
 
@@ -975,7 +939,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: new Date().toISOString(),
     };
 
-    setNotifications((prev) => [notif, ...prev]);
+    setNotifications((prev) => {
+      const nextNotifs = [notif, ...prev];
+      neonSetKey("notifications", nextNotifs);
+      return nextNotifs;
+    });
     setLatestNotificationToast(notif);
 
     // Sync to testing server DB
@@ -989,7 +957,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const deleteOrder = useCallback((orderId: string) => {
     setOrdersState((prev) => {
       const updated = prev.filter((o) => o.id !== orderId);
-      safeSetItem("somphea_orders", JSON.stringify(compactOrdersForStorage(updated)));
+      const compacted = compactOrdersForStorage(updated);
+      safeSetItem("somphea_orders", JSON.stringify(compacted));
+      neonSetKey("orders", compacted);
       return updated;
     });
     fetch(`/api/orders/${orderId}`, { method: "DELETE" }).catch(() => {});
@@ -998,7 +968,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const updateOrder = useCallback((orderId: string, updates: Partial<CustomerOrder>) => {
     setOrdersState((prev) => {
       const updated = prev.map((o) => (o.id === orderId ? { ...o, ...updates } : o));
-      safeSetItem("somphea_orders", JSON.stringify(compactOrdersForStorage(updated)));
+      const compacted = compactOrdersForStorage(updated);
+      safeSetItem("somphea_orders", JSON.stringify(compacted));
+      neonSetKey("orders", compacted);
       return updated;
     });
 
@@ -1023,6 +995,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const clearNotifications = useCallback(() => {
     setNotifications([]);
+    neonSetKey("notifications", []);
     fetch("/api/notifications", { method: "DELETE" }).catch(() => {});
   }, []);
 
@@ -1037,6 +1010,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setVouchersState((prev) => {
       const updated = [voucher, ...prev.filter((v) => v.code !== voucher.code)];
       safeSetItem("somphea_vouchers", JSON.stringify(updated));
+      neonSetKey("vouchers", updated);
       return updated;
     });
     fetch("/api/vouchers", {
@@ -1050,6 +1024,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setVouchersState((prev) => {
       const updated = prev.filter((v) => v.code !== code);
       safeSetItem("somphea_vouchers", JSON.stringify(updated));
+      neonSetKey("vouchers", updated);
       return updated;
     });
     fetch(`/api/vouchers?code=${encodeURIComponent(code)}`, { method: "DELETE" }).catch(() => {});
@@ -1060,6 +1035,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setStorefrontConfig((prev) => {
       const next = { ...prev, ...updates };
       safeSetItem("somphea_storefront_config", JSON.stringify(next));
+      neonSetKey("storefrontConfig", next);
       return next;
     });
     fetch("/api/store-config", {
@@ -1076,6 +1052,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCategoryBoxesState((prev) => {
       const updated = [...prev, box];
       safeSetItem("somphea_category_boxes", JSON.stringify(updated));
+      neonSetKey("categoryBoxes", updated);
       return updated;
     });
     fetch("/api/category-boxes", {
@@ -1090,6 +1067,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCategoryBoxesState((prev) => {
       const updated = prev.map((b) => (b.id === id ? { ...b, ...updates } : b));
       safeSetItem("somphea_category_boxes", JSON.stringify(updated));
+      neonSetKey("categoryBoxes", updated);
       return updated;
     });
     fetch(`/api/category-boxes/${id}`, {
@@ -1103,6 +1081,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCategoryBoxesState((prev) => {
       const updated = prev.filter((b) => b.id !== id);
       safeSetItem("somphea_category_boxes", JSON.stringify(updated));
+      neonSetKey("categoryBoxes", updated);
       return updated;
     });
     fetch(`/api/category-boxes/${id}`, { method: "DELETE" }).catch(() => {});
@@ -1111,6 +1090,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const resetCategoryBoxes = useCallback(() => {
     setCategoryBoxesState(DEFAULT_CATEGORY_BOXES);
     safeSetItem("somphea_category_boxes", JSON.stringify(DEFAULT_CATEGORY_BOXES));
+    neonSetKey("categoryBoxes", DEFAULT_CATEGORY_BOXES);
     fetch("/api/category-boxes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1121,6 +1101,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const reorderCategoryBoxes = useCallback((boxes: CategoryBox[]) => {
     setCategoryBoxesState(boxes);
     safeSetItem("somphea_category_boxes", JSON.stringify(boxes));
+    neonSetKey("categoryBoxes", boxes);
     fetch("/api/category-boxes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1154,6 +1135,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updated = [...prev, category];
       }
       safeSetItem("somphea_categories", JSON.stringify(updated));
+      neonSetKey("categories", updated);
       return updated;
     });
 
@@ -1170,6 +1152,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCategoriesState((prev) => {
       const updated = prev.map((c) => (c.id === id ? { ...c, ...updates, id } : c));
       safeSetItem("somphea_categories", JSON.stringify(updated));
+      neonSetKey("categories", updated);
       return updated;
     });
 
@@ -1185,6 +1168,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCategoriesState((prev) => {
       const updated = prev.filter((c) => c.id !== id);
       safeSetItem("somphea_categories", JSON.stringify(updated));
+      neonSetKey("categories", updated);
       return updated;
     });
 
@@ -1194,6 +1178,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const resetCategories = useCallback(() => {
     setCategoriesState(CATEGORIES);
     safeSetItem("somphea_categories", JSON.stringify(CATEGORIES));
+    neonSetKey("categories", CATEGORIES);
     fetch("/api/categories", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
