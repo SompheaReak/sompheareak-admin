@@ -5,161 +5,112 @@
   "vouchers": [
     {
       "code": "TOY15",
-      "badge": "STARTER TIER",
-      "minSpend": 5,
-      "colorGrad": "from-blue-500 to-cyan-500",
-      "pointsCost": 15,
-      "description": "$1.50 OFF Starter Voucher",
-      "discountPct": 0,
       "discountType": "fixed",
+      "fixedDiscountUsd": 1.5,
+      "discountPct": 0,
+      "pointsCost": 15,
+      "minSpend": 5,
+      "description": "$1.50 OFF Starter Voucher",
       "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ $1.50 (ចាប់ពី $5 ឡើង)",
-      "fixedDiscountUsd": 1.5
+      "badge": "STARTER TIER",
+      "colorGrad": "from-blue-500 to-cyan-500"
     },
     {
       "code": "VIP10OFF",
-      "badge": "POPULAR TIER",
-      "minSpend": 0,
-      "colorGrad": "from-purple-500 to-indigo-600",
-      "pointsCost": 25,
-      "description": "10% OFF VIP Collector Voucher",
-      "discountPct": 10,
       "discountType": "percentage",
-      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 10% សម្រាប់សមាជិក VIP"
+      "discountPct": 10,
+      "pointsCost": 25,
+      "minSpend": 0,
+      "description": "10% OFF VIP Collector Voucher",
+      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 10% សម្រាប់សមាជិក VIP",
+      "badge": "POPULAR TIER",
+      "colorGrad": "from-purple-500 to-indigo-600"
     },
     {
       "code": "SUPER15",
-      "badge": "GOLD TIER",
-      "minSpend": 15,
-      "colorGrad": "from-amber-400 to-orange-500",
-      "pointsCost": 40,
-      "description": "15% OFF Super Toy Gamer Voucher",
-      "discountPct": 15,
       "discountType": "percentage",
-      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 15% (ការកុម្ម៉ង់លើស $15)"
+      "discountPct": 15,
+      "pointsCost": 40,
+      "minSpend": 15,
+      "description": "15% OFF Super Toy Gamer Voucher",
+      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 15% (ការកុម្ម៉ង់លើស $15)",
+      "badge": "GOLD TIER",
+      "colorGrad": "from-amber-400 to-orange-500"
     },
     {
       "code": "CHAMP25",
-      "badge": "CHAMPION TIER",
-      "minSpend": 25,
-      "colorGrad": "from-rose-500 to-pink-600",
-      "pointsCost": 60,
-      "description": "25% OFF Master Champion Voucher + Free Gift",
-      "discountPct": 25,
       "discountType": "percentage",
-      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 25% + កាដូពិសេស"
+      "discountPct": 25,
+      "pointsCost": 60,
+      "minSpend": 25,
+      "description": "25% OFF Master Champion Voucher + Free Gift",
+      "descriptionKh": "ប័ណ្ណបញ្ចុះតម្លៃ 25% + កាដូពិសេស",
+      "badge": "CHAMPION TIER",
+      "colorGrad": "from-rose-500 to-pink-600"
     }
   ],
   "notifications": [],
   "storefrontConfig": {
-    "heroBadge": "🔥 TOP DROPS OF 2026",
-    "heroSubtitle": "Explore viral minifigures, anti-gravity RC racers, surprise blind boxes, and genuine Italian modular stainless steel charm bracelets.",
-    "heroTitlePrefix": "THE ULTIMATE",
-    "heroTitleSuffix": "UNIVERSE",
     "announcementText": "🚀 VIRAL TOY DROP: FLASH SALE UP TO 30% OFF · FREE PHNOM PENH DELIVERY OVER $25! 🇰🇭",
+    "heroBadge": "🔥 TOP DROPS OF 2026",
+    "heroTitlePrefix": "THE ULTIMATE",
     "heroTitleHighlight": "TOY & CHARM",
+    "heroTitleSuffix": "UNIVERSE",
+    "heroSubtitle": "Explore viral minifigures, anti-gravity RC racers, surprise blind boxes, and genuine Italian modular stainless steel charm bracelets.",
     "freeDeliveryThreshold": 25
   },
   "categoryBoxes": [
     {
       "id": "box-italy-bracelet",
-      "span": "full",
-      "badge": "STUDIO 🔗",
-      "image": "/assets/categories/custom-bracelet.jpg",
-      "order": 1,
       "title": "CUSTOMIZE ITALY CHARM",
-      "active": true,
       "titleKh": "រចនាខ្សែដៃអ៊ីតាលី Italy Charm",
       "subtitle": "316L Surgical Inox · 3D Live Studio",
+      "image": "/assets/categories/custom-bracelet.jpg",
       "actionType": "link",
-      "actionValue": "/italy-bracelet"
+      "actionValue": "/italy-bracelet",
+      "span": "full",
+      "badge": "STUDIO 🔗",
+      "order": 1,
+      "active": true
+    },
+    {
+      "id": "box-bracelet-unisex",
+      "title": "Braclet for Male&Female",
+      "titleKh": "ខ្សែដៃបុរស & នារី Braclet for Male&Female",
+      "subtitle": "Premium 316L Stainless Steel · Unisex Collection",
+      "image": "/assets/categories/bracelet-unisex.jpg",
+      "actionType": "link",
+      "actionValue": "/italy-bracelet",
+      "span": "full",
+      "badge": "UNISEX 🖤",
+      "order": 2,
+      "active": true
     },
     {
       "id": "box-minifigure",
-      "span": "half",
-      "badge": "VIRAL 🔥",
-      "image": "/assets/categories/minifigure.jpg",
-      "order": 2,
       "title": "MINIFIGURE",
-      "active": true,
       "titleKh": "តុក្កតាមីនី Minifigure",
       "subtitle": "Anime & Superhero Legends",
+      "image": "/assets/categories/minifigure.jpg",
       "actionType": "category",
-      "actionValue": "minifigure"
+      "actionValue": "minifigure",
+      "span": "half",
+      "badge": "VIRAL 🔥",
+      "order": 3,
+      "active": true
     },
     {
       "id": "box-toy",
+      "title": "TOY",
+      "titleKh": "ប្រដាប់ក្មេងលេង Toy",
+      "subtitle": "Action Toys, Speed Racers & Collectibles",
+      "image": "/assets/categories/toy.jpg",
+      "actionType": "category",
+      "actionValue": "toy",
       "span": "half",
       "badge": "TRENDING ⚡",
-      "image": "/assets/categories/toy.jpg",
-      "order": 3,
-      "title": "TOY",
-      "active": true,
-      "titleKh": "ប្រដាប់ក្មេងលេង Toys & RC",
-      "subtitle": "Tech Toys, Speed Racers & STEM",
-      "actionType": "category",
-      "actionValue": "toy-universe"
-    }
-  ],
-  "categories": [
-    {
-      "en": "All Toys",
-      "id": "all",
-      "kh": "ទាំងអស់",
-      "grad": "from-indigo-500 via-purple-500 to-pink-500",
-      "icon": "✨",
-      "name": "All Toys",
-      "sort_order": 0,
-      "description": "Browse the complete Somphea Reak toy universe and custom collections."
-    },
-    {
-      "en": "Minifigure Arcade",
-      "id": "minifigure",
-      "kh": "តុក្កតាមីនី Minifigure",
-      "grad": "from-cyan-400 to-blue-600",
-      "icon": "🧸",
-      "name": "Minifigure Arcade",
-      "sort_order": 1,
-      "description": "Collectible mini figures, superheroes, anime legends, and building heroes."
-    },
-    {
-      "en": "Mystery Blind Box",
-      "id": "blind-box",
-      "kh": "ប្រអប់អាថ៌កំបាំង Blind Box",
-      "grad": "from-pink-500 to-rose-600",
-      "icon": "🎁",
-      "name": "Mystery Blind Box",
-      "sort_order": 2,
-      "description": "Exciting mystery unboxing series with super rare secret editions to discover!"
-    },
-    {
-      "en": "Tech Toys & RC",
-      "id": "toy-universe",
-      "kh": "ប្រដាប់ក្មេងលេងបច្ចេកវិទ្យា & ឡានបញ្ជា",
-      "grad": "from-amber-400 to-orange-600",
-      "icon": "🪀",
-      "name": "Tech Toys & RC",
-      "sort_order": 3,
-      "description": "Interactive robots, wall-climbing racers, LED drones, and STEM gadgets."
-    },
-    {
-      "en": "Italy Modular Charm",
-      "id": "bracelet",
-      "kh": "ខ្សែដៃម៉ូឌុលអ៊ីតាលី Italy Charm",
-      "grad": "from-emerald-400 to-teal-600",
-      "icon": "📿",
-      "name": "Italy Modular Charm",
-      "sort_order": 4,
-      "description": "Craft your unique custom bracelet with stainless steel Italian charm links."
-    },
-    {
-      "en": "Galaxy Plushies",
-      "id": "plushies",
-      "kh": "តុក្កតាសំឡីទន់ៗ Plushies",
-      "grad": "from-purple-400 to-indigo-600",
-      "icon": "🦄",
-      "name": "Galaxy Plushies",
-      "sort_order": 5,
-      "description": "Ultra-soft premium cuddly plushies, anime squishies, and bedtime companions."
+      "order": 4,
+      "active": true
     }
   ]
 }

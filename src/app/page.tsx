@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
@@ -52,17 +52,29 @@ import {
   Upload,
   Dices,
   Images,
+  Check,
 } from "lucide-react";
 import { OrderReceiptModal } from "@/components/OrderReceiptModal";
 import { CustomBraceletStudio } from "@/components/CustomBraceletStudio";
 import { ReceiptBraceletBand } from "@/components/ReceiptBraceletBand";
 import { getCharmCode, generateUniqueCharmCode } from "@/data/charms";
 
-const VALID_PASSWORDS = [
-  "Sompheareakshop1234",
-  "Sompheareak.com-Admin04/10/2026-Ming",
-  process.env.NEXT_PUBLIC_ADMIN_PIN,
-].filter(Boolean) as string[];
+export interface BulkPhotoItem {
+  tempId: string;
+  code: string;
+  name: string;
+  nameKh: string;
+  cat: string;
+  price: string;
+  discount: string;
+  stock: string;
+  pt: string;
+  rarity: ToyRarity;
+  image: string;
+  fileName: string;
+}
+
+const ADMIN_PASSWORD = "Sompheareakshop1234";
 
 const PRESET_TOY_IMAGES = [
   { label: "Cyber Mecha", url: "https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80" },
@@ -79,6 +91,7 @@ export default function AdminPage() {
   const {
     products,
     addProduct,
+    bulkAddProducts,
     updateProduct,
     deleteProduct,
     wipeAllProducts,
@@ -172,6 +185,489 @@ export default function AdminPage() {
   const [productModalOpen, setProductModalOpen] = useState<boolean>(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
+  // ==========================================
+  // BULK UPLOAD STATE & HELPERS
+  // ==========================================
+  const [bulkModalOpen, setBulkModalOpen] = useState<boolean>(false);
+  const [bulkRawText, setBulkRawText] = useState<string>("");
+  const [bulkReplaceMode, setBulkReplaceMode] = useState<boolean>(false);
+  const [bulkParsedProducts, setBulkParsedProducts] = useState<
+    Array<Partial<Product> & { _valid: boolean; _errors: string[] }>
+  >([]);
+  const [bulkFileError, setBulkFileError] = useState<string>("");
+  const [bulkIsSubmitting, setBulkIsSubmitting] = useState<boolean>(false);
+
+  // Multi-Photo Bulk Upload State (1 Photo = 1 Product)
+  const bulkFileInputRef = useRef<HTMLInputElement>(null);
+  const [bulkModalTab, setBulkModalTab] = useState<"photos" | "csv">("photos");
+  const [bulkPhotoItems, setBulkPhotoItems] = useState<BulkPhotoItem[]>([]);
+  const [bulkGlobalCat, setBulkGlobalCat] = useState<string>("minifigure");
+  const [bulkGlobalPrice, setBulkGlobalPrice] = useState<string>("9.50");
+  const [bulkGlobalStock, setBulkGlobalStock] = useState<string>("20");
+  const [bulkIsProcessingImages, setBulkIsProcessingImages] = useState<boolean>(false);
+
+  // Parse CSV line handling quoted commas
+  const parseCsvLine = (line: string): string[] => {
+    const result: string[] = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"' || char === "'") {
+        inQuotes = !inQuotes;
+      } else if ((char === "," || char === "\t" || char === ";") && !inQuotes) {
+        result.push(cur.trim());
+        cur = "";
+      } else {
+        cur += char;
+      }
+    }
+    result.push(cur.trim());
+    return result;
+  };
+
+  const parseBulkInput = (text: string) => {
+    setBulkFileError("");
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setBulkParsedProducts([]);
+      return;
+    }
+
+    // Try JSON array first
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const json = JSON.parse(trimmed);
+        if (Array.isArray(json)) {
+          const parsed = json.map((item: any, idx: number) => {
+            const errors: string[] = [];
+            const name = String(item.name || item.title || item.product_name || "").trim();
+            if (!name) errors.push("Missing product name");
+            const price = Number(item.price || item.cost || item.priceUsd) || 0;
+            if (price <= 0) errors.push("Price must be > $0");
+
+            return {
+              id: item.id || `toy-${Date.now()}-${idx}`,
+              code: String(item.code || item.sku || `SPK-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
+              name: name || "Untitled Product",
+              nameKh: String(item.nameKh || item.khmerName || name || "ផលិតផល").trim(),
+              cat: String(item.cat || item.category || "minifigure").trim(),
+              price: price || 5.0,
+              discount: Number(item.discount) || 0,
+              stock: Number(item.stock || item.quantity) || 10,
+              pt: Number(item.pt || item.points) || 4,
+              image: String(item.image || item.imageUrl || "https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80").trim(),
+              images: Array.isArray(item.images) ? item.images : [item.image || "https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80"],
+              bio: String(item.bio || item.description || "Fun toy collectible.").trim(),
+              bioKh: String(item.bioKh || item.descriptionKh || "ប្រដាប់ក្មេងលេងគុណភាពខ្ពស់។").trim(),
+              rarity: (item.rarity as ToyRarity) || "Rare",
+              dimensions: String(item.dimensions || "10cm x 8cm").trim(),
+              _valid: errors.length === 0,
+              _errors: errors,
+            };
+          });
+          setBulkParsedProducts(parsed);
+          return;
+        }
+      } catch {
+        // Not JSON, continue to CSV
+      }
+    }
+
+    // Parse CSV / TSV lines
+    const lines = trimmed.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length === 0) {
+      setBulkParsedProducts([]);
+      return;
+    }
+
+    const firstLineCells = parseCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
+    const hasHeader = firstLineCells.some((h) => ["name", "title", "code", "sku", "price"].includes(h));
+
+    let headerMap: { [key: string]: number } = {};
+    let dataLines = lines;
+
+    if (hasHeader) {
+      firstLineCells.forEach((h, idx) => {
+        if (h.includes("namekh") || h.includes("khmer")) headerMap["nameKh"] = idx;
+        else if (h.includes("name") || h.includes("title")) headerMap["name"] = idx;
+        else if (h.includes("code") || h.includes("sku")) headerMap["code"] = idx;
+        else if (h.includes("cat")) headerMap["cat"] = idx;
+        else if (h.includes("price") || h.includes("cost")) headerMap["price"] = idx;
+        else if (h.includes("disc")) headerMap["discount"] = idx;
+        else if (h.includes("stock") || h.includes("qty")) headerMap["stock"] = idx;
+        else if (h.includes("point") || h.includes("pt")) headerMap["pt"] = idx;
+        else if (h.includes("img") || h.includes("image") || h.includes("photo")) headerMap["image"] = idx;
+        else if (h.includes("biokh") || h.includes("desckh")) headerMap["bioKh"] = idx;
+        else if (h.includes("bio") || h.includes("desc")) headerMap["bio"] = idx;
+        else if (h.includes("rarity")) headerMap["rarity"] = idx;
+        else if (h.includes("dim")) headerMap["dimensions"] = idx;
+      });
+      dataLines = lines.slice(1);
+    } else {
+      headerMap = {
+        code: 0,
+        name: 1,
+        nameKh: 2,
+        cat: 3,
+        price: 4,
+        discount: 5,
+        stock: 6,
+        pt: 7,
+        image: 8,
+        bio: 9,
+        bioKh: 10,
+      };
+    }
+
+    const parsed = dataLines.map((line, idx) => {
+      const cells = parseCsvLine(line);
+      const getVal = (field: string) => {
+        const cIdx = headerMap[field];
+        return cIdx !== undefined && cells[cIdx] !== undefined ? cells[cIdx] : "";
+      };
+
+      const name = getVal("name").trim();
+      const priceStr = getVal("price").replace(/[^0-9.]/g, "");
+      const price = parseFloat(priceStr) || 0;
+      const errors: string[] = [];
+      if (!name) errors.push("Missing product name");
+      if (price <= 0) errors.push("Invalid price");
+
+      const code = getVal("code").trim() || `SPK-${Math.floor(1000 + Math.random() * 9000)}`;
+      const nameKh = getVal("nameKh").trim() || name || "ផលិតផល";
+      const cat = getVal("cat").trim() || "minifigure";
+      const discount = parseInt(getVal("discount"), 10) || 0;
+      const stock = parseInt(getVal("stock"), 10) || 15;
+      const pt = parseInt(getVal("pt"), 10) || 4;
+      const image = getVal("image").trim() || "https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80";
+      const bio = getVal("bio").trim() || "Fun collectible toy.";
+      const bioKh = getVal("bioKh").trim() || "ប្រដាប់ក្មេងលេងគុណភាពខ្ពស់។";
+      const rarity = (getVal("rarity").trim() as ToyRarity) || "Rare";
+      const dimensions = getVal("dimensions").trim() || "10cm x 8cm";
+
+      return {
+        id: `toy-${Date.now()}-${idx}`,
+        code,
+        name: name || "Untitled Product",
+        nameKh,
+        cat,
+        price: price || 5.0,
+        discount,
+        stock,
+        pt,
+        image,
+        images: [image],
+        bio,
+        bioKh,
+        rarity,
+        dimensions,
+        _valid: errors.length === 0,
+        _errors: errors,
+      };
+    });
+
+    setBulkParsedProducts(parsed);
+  };
+
+  const handleOpenBulkUpload = () => {
+    sounds.playPop();
+    setBulkFileError("");
+    setBulkModalTab("photos");
+    setBulkModalOpen(true);
+  };
+
+  // Direct trigger device file selector for bulk photos (1 Photo = 1 Product)
+  const handleTriggerBulkPhotoUpload = () => {
+    try {
+      if (bulkFileInputRef.current) {
+        bulkFileInputRef.current.value = "";
+        bulkFileInputRef.current.click();
+      } else {
+        setBulkModalTab("photos");
+        setBulkModalOpen(true);
+      }
+    } catch {
+      setBulkModalTab("photos");
+      setBulkModalOpen(true);
+    }
+    sounds.playPop();
+  };
+
+  const handleOpenBulkPhotoUpload = () => {
+    sounds.playPop();
+    if (bulkPhotoItems.length > 0) {
+      setBulkFileError("");
+      setBulkModalTab("photos");
+      setBulkModalOpen(true);
+    } else {
+      handleTriggerBulkPhotoUpload();
+    }
+  };
+
+  // Convert raw image filename like 'goku_super_saiyan.png' to 'Goku Super Saiyan'
+  const formatFilenameToName = (filename: string): string => {
+    const withoutExt = filename.replace(/\.[^/.]+$/, "");
+    const withSpaces = withoutExt.replace(/[_\-+]+/g, " ");
+    const cleaned = withSpaces.replace(/^(img|dsc|photo|pic|image|screenshot)\s*/i, "");
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    if (words.length === 0) return "New Product";
+    const titled = words
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ")
+      .trim();
+    return titled || "New Product";
+  };
+
+  // Handle multi-image file selection (each photo = 1 new product)
+  const handleBulkPhotosSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    setBulkIsProcessingImages(true);
+    sounds.playPop();
+    showToast(`📸 Loading & optimizing ${files.length} photo(s)...`);
+
+    try {
+      const newItems: BulkPhotoItem[] = [];
+      const defaultCat = bulkGlobalCat || categories.find((c) => c.id !== "all")?.id || "minifigure";
+      const defaultPrice = bulkGlobalPrice || "9.50";
+      const defaultStock = bulkGlobalStock || "20";
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const resized = await resizeImageFile(file, 640, 0.75);
+        if (!resized) continue;
+
+        const cleanName = formatFilenameToName(file.name);
+        const randomCode = `SPK-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        newItems.push({
+          tempId: `bulk-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 7)}`,
+          code: randomCode,
+          name: cleanName,
+          nameKh: cleanName,
+          cat: defaultCat,
+          price: defaultPrice,
+          discount: "0",
+          stock: defaultStock,
+          pt: "5",
+          rarity: "Rare",
+          image: resized,
+          fileName: file.name,
+        });
+      }
+
+      if (newItems.length === 0) {
+        alert("Could not load photos. Please make sure you select valid image files.");
+        return;
+      }
+
+      setBulkPhotoItems((prev) => [...prev, ...newItems]);
+      setBulkModalTab("photos");
+      setBulkModalOpen(true);
+      sounds.playChime();
+      showToast(`🎉 Loaded ${newItems.length} products! Ready to review and publish.`);
+    } catch (err: any) {
+      alert("Failed to process images: " + (err?.message || "Error"));
+    } finally {
+      setBulkIsProcessingImages(false);
+      if (e.target) e.target.value = "";
+    }
+  };
+
+  // Replace photo for a single item in the bulk batch
+  const handleReplaceSinglePhoto = async (index: number, file: File) => {
+    const resized = await resizeImageFile(file, 640, 0.75);
+    if (!resized) return;
+    setBulkPhotoItems((prev) => {
+      const copy = [...prev];
+      if (copy[index]) {
+        copy[index] = { ...copy[index], image: resized };
+      }
+      return copy;
+    });
+    sounds.playChime();
+    showToast("Updated photo!");
+  };
+
+  // Batch apply category to all items
+  const handleApplyCatToAll = () => {
+    if (!bulkGlobalCat) return;
+    sounds.playPop();
+    setBulkPhotoItems((prev) => prev.map((item) => ({ ...item, cat: bulkGlobalCat })));
+    showToast(`Applied "${bulkGlobalCat}" category to all ${bulkPhotoItems.length} products!`);
+  };
+
+  // Batch apply price to all items
+  const handleApplyPriceToAll = () => {
+    const num = parseFloat(bulkGlobalPrice);
+    if (isNaN(num) || num <= 0) {
+      alert("Please enter a valid price (e.g. 9.50)");
+      return;
+    }
+    sounds.playPop();
+    setBulkPhotoItems((prev) => prev.map((item) => ({ ...item, price: bulkGlobalPrice })));
+    showToast(`Applied $${num.toFixed(2)} price to all ${bulkPhotoItems.length} products!`);
+  };
+
+  // Batch apply stock to all items
+  const handleApplyStockToAll = () => {
+    const num = parseInt(bulkGlobalStock, 10);
+    if (isNaN(num) || num < 0) {
+      alert("Please enter a valid stock quantity (e.g. 20)");
+      return;
+    }
+    sounds.playPop();
+    setBulkPhotoItems((prev) => prev.map((item) => ({ ...item, stock: bulkGlobalStock })));
+    showToast(`Applied stock ${num} to all ${bulkPhotoItems.length} products!`);
+  };
+
+  // Update single field on a bulk photo item
+  const updateBulkPhotoItem = (index: number, updates: Partial<BulkPhotoItem>) => {
+    setBulkPhotoItems((prev) => {
+      const copy = [...prev];
+      if (copy[index]) {
+        copy[index] = { ...copy[index], ...updates };
+      }
+      return copy;
+    });
+  };
+
+  // Remove one item from the batch
+  const removeBulkPhotoItem = (index: number) => {
+    sounds.playPop();
+    setBulkPhotoItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Save all bulk photo products into database
+  const handleSaveAllBulkPhotos = async () => {
+    if (bulkPhotoItems.length === 0) {
+      alert("No photos added. Please select photos first.");
+      return;
+    }
+
+    const emptyNameIndex = bulkPhotoItems.findIndex((item) => !item.name.trim());
+    if (emptyNameIndex !== -1) {
+      alert(`Product #${emptyNameIndex + 1} is missing a name. Please enter a name for all products.`);
+      return;
+    }
+
+    setBulkIsSubmitting(true);
+    try {
+      sounds.playChime();
+      const productsToCreate = bulkPhotoItems.map((item) => ({
+        code: item.code.trim() || `SPK-${Math.floor(1000 + Math.random() * 9000)}`,
+        name: item.name.trim(),
+        nameKh: item.nameKh.trim() || item.name.trim(),
+        cat: item.cat || "minifigure",
+        price: parseFloat(item.price) || 5.0,
+        discount: parseInt(item.discount, 10) || 0,
+        stock: parseInt(item.stock, 10) || 10,
+        pt: parseInt(item.pt, 10) || 5,
+        image: item.image,
+        images: [item.image],
+        bio: "Fun & collectible toy crafted with high durable kid-safe ABS material.",
+        bioKh: "តុក្កតាប្រដាប់ក្មេងលេងគុណភាពខ្ពស់ សុវត្ថិភាពសម្រាប់កុមារ។",
+        rarity: item.rarity || "Rare",
+        rating: 5.0,
+        reviewsCount: 1,
+        featured: true,
+        isNew: true,
+        free_delivery: true,
+        ageRecommendation: "Ages 4+",
+        dimensions: "10cm x 8cm",
+      }));
+
+      await bulkAddProducts(productsToCreate, false);
+      sounds.playFanfare();
+      showToast(`🎉 Added ${productsToCreate.length} new products to storefront!`);
+      setBulkPhotoItems([]);
+      setBulkModalOpen(false);
+    } catch (err: any) {
+      alert("Failed to save products: " + (err?.message || "Unknown error"));
+    } finally {
+      setBulkIsSubmitting(false);
+    }
+  };
+
+  const handleDownloadCsvTemplate = () => {
+    sounds.playPop();
+    const csvContent =
+      "Code,Name,NameKh,Category,Price,Discount,Stock,Points,Image,Bio,BioKh,Rarity,Dimensions\n" +
+      'SPK-1001,Iron Man Cyber Mecha,តុក្កតាមេកាអាយរ៉ុនមែន,minifigure,9.50,0,25,5,https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80,Cyber superhero action figure,តុក្កតាមេកាវីរបុរស,Rare,10cm x 8cm\n' +
+      'SPK-1002,Wall Climber Laser Car,ឡានឡាស៊ែរឡើងជញ្ជាំង,toy-universe,14.50,10,15,8,https://images.unsplash.com/photo-1594787318286-3d835c1d207f?auto=format&fit=crop&w=800&q=80,Zero gravity wall climbing racer,ឡានបញ្ជាឡើងជញ្ជាំង,Legendary,15cm x 8cm\n' +
+      'SPK-1003,Pop Bear Blind Box,ប្រអប់អាថ៌កំបាំង Pop Bear,blind-box,7.00,0,30,4,https://images.unsplash.com/photo-1563245372-f21724e3856d?auto=format&fit=crop&w=800&q=80,Mystery collector series bear,តុក្កតាប្រអប់អាថ៌កំបាំង,Super Rare,8cm x 5cm\n' +
+      'SPK-1004,Braclet for Male&Female,ខ្សែដៃបុរស & នារី Braclet for Male&Female,bracelet,12.00,0,25,6,/assets/categories/bracelet-unisex.jpg,Authentic 316L modular stainless steel bracelet,ខ្សែដៃបុរសនារីប្រណិត,Limited Edition,17 links';
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", "sompheareak_bulk_products_template.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast("Template CSV downloaded!");
+  };
+
+  const handleLoadSampleBatch = () => {
+    sounds.playPop();
+    const sample =
+      "Code,Name,NameKh,Category,Price,Discount,Stock,Points,Image,Bio,BioKh,Rarity,Dimensions\n" +
+      'SPK-3001,Cyber Mecha Warrior,តុក្កតាមេកាអាយរ៉ុនមែន,minifigure,9.50,0,25,5,https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80,Cyber superhero action figure,តុក្កតាមេកាវីរបុរស,Rare,10cm x 8cm\n' +
+      'SPK-3002,Wall Climber Laser Car,ឡានឡាស៊ែរឡើងជញ្ជាំង,toy-universe,14.50,10,15,8,https://images.unsplash.com/photo-1594787318286-3d835c1d207f?auto=format&fit=crop&w=800&q=80,Zero gravity wall climbing racer,ឡានបញ្ជាឡើងជញ្ជាំង,Legendary,15cm x 8cm\n' +
+      'SPK-3003,Pop Bear Blind Box,ប្រអប់អាថ៌កំបាំង Pop Bear,blind-box,7.00,0,30,4,https://images.unsplash.com/photo-1563245372-f21724e3856d?auto=format&fit=crop&w=800&q=80,Mystery collector series bear,តុក្កតាប្រអប់អាថ៌កំបាំង,Super Rare,8cm x 5cm\n' +
+      'SPK-3004,Galaxy Plushie Star,តុក្កតាសំឡីកាឡាក់ស៊ី,plushies,8.50,0,20,5,https://images.unsplash.com/photo-1558877385-81a1c7e67d72?auto=format&fit=crop&w=800&q=80,Ultra soft plush companion,តុក្កតាសំឡីទន់ៗ,Common,20cm\n' +
+      'SPK-3005,Braclet for Male&Female,ខ្សែដៃបុរស & នារី Braclet for Male&Female,bracelet,12.00,0,25,6,/assets/categories/bracelet-unisex.jpg,Authentic 316L modular stainless steel bracelet,ខ្សែដៃបុរសនារីប្រណិត,Limited Edition,17 links';
+
+    setBulkRawText(sample);
+    parseBulkInput(sample);
+    showToast("Loaded 5 sample products into preview!");
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    sounds.playPop();
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const content = evt.target?.result as string;
+      if (content) {
+        setBulkRawText(content);
+        parseBulkInput(content);
+        showToast(`Loaded ${file.name}! Check preview below.`);
+      }
+    };
+    reader.onerror = () => {
+      setBulkFileError("Failed to read file.");
+    };
+    reader.readAsText(file);
+  };
+
+  const handleExecuteBulkUpload = async () => {
+    const valid = bulkParsedProducts.filter((p) => p._valid);
+    if (valid.length === 0) {
+      alert("No valid products to import. Please check for errors in the preview table.");
+      return;
+    }
+
+    setBulkIsSubmitting(true);
+    try {
+      sounds.playChime();
+      await bulkAddProducts(valid as Product[], bulkReplaceMode);
+      sounds.playFanfare();
+      showToast(`🎉 Successfully imported ${valid.length} products to store!`);
+      setBulkModalOpen(false);
+      setBulkRawText("");
+      setBulkParsedProducts([]);
+    } catch (err: any) {
+      alert("Bulk upload failed: " + (err?.message || "Unknown error"));
+    } finally {
+      setBulkIsSubmitting(false);
+    }
+  };
+
   // Product Form Fields
   const [pCode, setPCode] = useState("");
   const [pName, setPName] = useState("");
@@ -256,7 +752,7 @@ export default function AdminPage() {
 
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (VALID_PASSWORDS.includes(passwordInput.trim())) {
+    if (passwordInput === ADMIN_PASSWORD) {
       sounds.playFanfare();
       sessionStorage.setItem("somphea_admin_auth", "true");
       setIsAuthenticated(true);
@@ -515,7 +1011,14 @@ export default function AdminPage() {
       (p.nameKh && p.nameKh.toLowerCase().includes(q)) ||
       p.id.toLowerCase().includes(q) ||
       (p.code && p.code.toLowerCase().includes(q));
-    const matchesCat = productCatFilter === "all" || p.cat === productCatFilter;
+    const matchesCat =
+      productCatFilter === "all" ||
+      p.cat === productCatFilter ||
+      (productCatFilter === "toy" &&
+        (p.cat === "toy-universe" ||
+          p.cat === "tech-toys" ||
+          p.cat === "blind-box" ||
+          p.cat === "plushies"));
     return matchesSearch && matchesCat;
   });
 
@@ -533,9 +1036,14 @@ export default function AdminPage() {
     return matchesSearch && matchesCat;
   });
 
-  // Helper to downscale uploaded images to prevent exceeding localStorage quota
-  const resizeImageFile = (file: File, maxDim = 800, quality = 0.82): Promise<string> => {
+  // Helper to downscale uploaded images to prevent exceeding localStorage / payload quota
+  const resizeImageFile = (file: File, maxDim = 640, quality = 0.75): Promise<string> => {
     return new Promise((resolve) => {
+      if (!file || !file.type.startsWith("image/")) {
+        resolve("");
+        return;
+      }
+
       const reader = new FileReader();
       reader.onload = (e) => {
         const dataUrl = e.target?.result as string;
@@ -545,36 +1053,44 @@ export default function AdminPage() {
         }
         const img = new window.Image();
         img.onload = () => {
-          const nw = img.naturalWidth || img.width;
-          const nh = img.naturalHeight || img.height;
-          let w = nw;
-          let h = nh;
-          if (w > maxDim || h > maxDim) {
+          try {
+            const nw = img.naturalWidth || img.width || 640;
+            const nh = img.naturalHeight || img.height || 640;
+
+            let w = nw;
+            let h = nh;
             if (w > h) {
-              h = Math.max(1, Math.round((h * maxDim) / w));
-              w = maxDim;
+              if (w > maxDim) {
+                h = Math.max(1, Math.round((h * maxDim) / w));
+                w = maxDim;
+              }
             } else {
-              w = Math.max(1, Math.round((w * maxDim) / h));
-              h = maxDim;
+              if (h > maxDim) {
+                w = Math.max(1, Math.round((w * maxDim) / h));
+                h = maxDim;
+              }
             }
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.max(1, w);
+            canvas.height = Math.max(1, h);
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+              resolve(dataUrl.length < 500000 ? dataUrl : "");
+              return;
+            }
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, 0, 0, w, h);
+            const isPng = file.type === "image/png";
+            const resized = isPng ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", quality);
+            resolve(resized || dataUrl);
+          } catch {
+            resolve(dataUrl.length < 500000 ? dataUrl : "");
           }
-          const canvas = document.createElement("canvas");
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) {
-            resolve(dataUrl);
-            return;
-          }
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = "high";
-          ctx.drawImage(img, 0, 0, w, h);
-          // For charm icons (<= 480px), allow PNG to preserve alpha transparency; otherwise compress to JPEG
-          const isPngCharm = file.type === "image/png" && maxDim <= 480;
-          const resized = isPngCharm ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", quality);
-          resolve(resized);
         };
-        img.onerror = () => resolve(dataUrl);
+        img.onerror = () => {
+          resolve(dataUrl.length < 500000 ? dataUrl : "");
+        };
         img.src = dataUrl;
       };
       reader.onerror = () => resolve("");
@@ -915,13 +1431,17 @@ export default function AdminPage() {
     }
   };
 
-  const handleBoxImageUpload = async (file: File) => {
+  const handleBoxImageUpload = (file: File) => {
     if (!file) return;
-    const resized = await resizeImageFile(file, 800, 0.82);
-    if (resized) {
-      setBImage(resized);
-      sounds.playPop();
-    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      if (result) {
+        setBImage(result);
+        sounds.playPop();
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   // Filtered Orders
@@ -940,31 +1460,31 @@ export default function AdminPage() {
   // ==========================================
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 selection:bg-emerald-600 selection:text-white">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center p-4 selection:bg-emerald-600 selection:text-white transition-colors duration-200">
         <motion.div
           animate={shakeLogin ? { x: [-10, 10, -10, 10, 0] } : {}}
           transition={{ duration: 0.4 }}
-          className="w-full max-w-md bg-slate-950 border-2 border-emerald-500/40 rounded-3xl p-8 shadow-2xl text-white relative overflow-hidden"
+          className="w-full max-w-md bg-white dark:bg-slate-950 border-2 border-slate-200 dark:border-emerald-500/40 rounded-3xl p-8 shadow-2xl text-slate-900 dark:text-white relative overflow-hidden transition-colors"
         >
           {/* Ambient Glow */}
-          <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-500/10 dark:bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
 
           <div className="text-center relative z-10">
             <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center mx-auto mb-4 shadow-toy-green-glow">
               <Lock className="w-8 h-8" />
             </div>
 
-            <h1 className="text-2xl font-black font-fredoka text-white">
+            <h1 className="text-2xl font-black font-fredoka text-slate-900 dark:text-white">
               Somphea Reak Owner Portal
             </h1>
-            <p className="text-xs text-slate-400 mt-1 mb-6">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-6">
               Administrative Gateway &middot; Enter authorized passcode to manage toys, pricing, and live customer orders.
             </p>
 
             <form onSubmit={handleLoginSubmit} className="space-y-4 text-left">
               <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1.5 flex items-center gap-1.5">
-                  <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1.5 flex items-center gap-1.5">
+                  <KeyRound className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   <span>Owner Passcode</span>
                 </label>
                 <div className="relative">
@@ -974,12 +1494,12 @@ export default function AdminPage() {
                     value={passwordInput}
                     onChange={(e) => setPasswordInput(e.target.value)}
                     placeholder="Enter store password"
-                    className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white placeholder-slate-500 focus:border-emerald-500 outline-none pr-10 font-mono"
+                    className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-500 outline-none pr-10 font-mono"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-white"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -1033,33 +1553,35 @@ export default function AdminPage() {
       </AnimatePresence>
 
       {/* Admin Header */}
-      <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-4 sm:px-8 py-3.5 transition-colors duration-200">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="relative w-9 h-9 rounded-xl overflow-hidden bg-gradient-to-tr from-emerald-500 to-teal-400 p-0.5">
-              <Image src="/assets/logo.jpg" alt="Logo" fill className="object-cover rounded-xl" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-black text-lg font-fredoka text-slate-900 dark:text-white">
-                  SOMPHEA REAK
-                </span>
-                <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider">
-                  Admin Panel
-                </span>
+      <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-3 sm:px-8 py-2.5 sm:py-3.5 transition-colors duration-200">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2.5 sm:gap-4">
+          <div className="flex items-center justify-between w-full sm:w-auto gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden bg-gradient-to-tr from-emerald-500 to-teal-400 p-0.5 shrink-0">
+                <Image src="/assets/logo.jpg" alt="Logo" fill className="object-cover rounded-xl" />
               </div>
-              <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
-                <span>Connected to Live Storefront</span>
-              </p>
+              <div>
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <span className="font-black text-base sm:text-lg font-fredoka text-slate-900 dark:text-white">
+                    SOMPHEA REAK
+                  </span>
+                  <span className="px-1.5 py-0.2 sm:px-2 sm:py-0.5 rounded-md bg-emerald-600 text-white text-[9px] sm:text-[10px] font-black uppercase tracking-wider">
+                    Admin
+                  </span>
+                </div>
+                <p className="text-[10px] sm:text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
+                  <span>Live Storefront Sync</span>
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-1.5 sm:gap-2.5 overflow-x-auto max-w-full pb-1 scrollbar-none w-full sm:w-auto justify-start sm:justify-end">
 
             {/* View Storefront Link (Clean Customer Front) */}
             <Link
-              href="/"
+              href={process.env.NEXT_PUBLIC_STOREFRONT_URL || "/"}
               target="_blank"
               className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-toy-green-glow"
               title="Open live customer storefront in new tab"
@@ -1070,7 +1592,7 @@ export default function AdminPage() {
 
             {/* View Dedicated Italy Bracelet Studio */}
             <Link
-              href="/italy-bracelet"
+              href={process.env.NEXT_PUBLIC_STOREFRONT_URL ? `${process.env.NEXT_PUBLIC_STOREFRONT_URL}/italy-bracelet` : "/italy-bracelet"}
               target="_blank"
               className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-black text-xs flex items-center gap-1.5 transition-all shadow-sm border border-slate-300 dark:border-slate-700"
               title="Open Italy Modular Charm Bracelet Studio"
@@ -1105,69 +1627,80 @@ export default function AdminPage() {
 
       {/* Dashboard Body */}
       <main className="max-w-7xl mx-auto px-4 sm:px-8 py-8 space-y-8">
+        {/* Hidden master input for bulk photo upload (1 Photo = 1 Product) */}
+        <input
+          ref={bulkFileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={handleBulkPhotosSelected}
+          className="fixed -top-[1000px] -left-[1000px] opacity-0 pointer-events-none w-1 h-1"
+          tabIndex={-1}
+          aria-hidden="true"
+        />
         {/* Quick Analytics Metrics Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
           {/* Revenue */}
-          <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0">
-              <DollarSign className="w-6 h-6" />
+          <div className="p-3 sm:p-5 rounded-2xl sm:rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-2.5 sm:gap-4">
+            <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0">
+              <DollarSign className="w-4 h-4 sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block leading-tight">Total Volume</span>
-              <span className="text-2xl font-black font-fredoka text-slate-900 dark:text-white">
+            <div className="min-w-0 flex-1">
+              <span className="text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 block leading-tight truncate">Total Volume</span>
+              <span className="text-lg sm:text-2xl font-black font-fredoka text-slate-900 dark:text-white truncate block">
                 {formatPrice(totalRevenueUsd, currency)}
               </span>
-              <span className="text-[10px] text-slate-400 block">
+              <span className="text-[9px] sm:text-[10px] text-slate-400 block truncate">
                 ≈ {Math.round(totalRevenueUsd * 4100).toLocaleString()} KHR
               </span>
             </div>
           </div>
 
           {/* Orders */}
-          <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-teal-100 dark:bg-teal-950/70 text-teal-600 dark:text-teal-400 flex items-center justify-center flex-shrink-0">
-              <ShoppingBag className="w-6 h-6" />
+          <div className="p-3 sm:p-5 rounded-2xl sm:rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-2.5 sm:gap-4">
+            <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-teal-100 dark:bg-teal-950/70 text-teal-600 dark:text-teal-400 flex items-center justify-center flex-shrink-0">
+              <ShoppingBag className="w-4 h-4 sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block leading-tight">Total Orders</span>
-              <span className="text-2xl font-black font-fredoka text-slate-900 dark:text-white">
+            <div className="min-w-0 flex-1">
+              <span className="text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 block leading-tight truncate">Total Orders</span>
+              <span className="text-lg sm:text-2xl font-black font-fredoka text-slate-900 dark:text-white truncate block">
                 {orders.length}
               </span>
               {pendingOrdersCount > 0 ? (
-                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold block">
-                  {pendingOrdersCount} pending fulfillment!
+                <span className="text-[9px] sm:text-[10px] text-amber-600 dark:text-amber-400 font-bold block truncate">
+                  {pendingOrdersCount} pending!
                 </span>
               ) : (
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block">All caught up</span>
+                <span className="text-[9px] sm:text-[10px] text-emerald-600 dark:text-emerald-400 block truncate">All caught up</span>
               )}
             </div>
           </div>
 
           {/* Products */}
-          <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-100 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 flex items-center justify-center flex-shrink-0">
-              <Package className="w-6 h-6" />
+          <div className="p-3 sm:p-5 rounded-2xl sm:rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-2.5 sm:gap-4">
+            <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-indigo-100 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 flex items-center justify-center flex-shrink-0">
+              <Package className="w-4 h-4 sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block leading-tight">Active Catalog</span>
-              <span className="text-2xl font-black font-fredoka text-slate-900 dark:text-white">
+            <div className="min-w-0 flex-1">
+              <span className="text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 block leading-tight truncate">Active Catalog</span>
+              <span className="text-lg sm:text-2xl font-black font-fredoka text-slate-900 dark:text-white truncate block">
                 {products.length}
               </span>
-              <span className="text-[10px] text-slate-400 block">{inStockProductsCount} items in stock</span>
+              <span className="text-[9px] sm:text-[10px] text-slate-400 block truncate">{inStockProductsCount} in stock</span>
             </div>
           </div>
 
           {/* Points */}
-          <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-950/70 text-amber-600 dark:text-amber-400 flex items-center justify-center flex-shrink-0">
-              <Sparkles className="w-6 h-6" />
+          <div className="p-3 sm:p-5 rounded-2xl sm:rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-2.5 sm:gap-4">
+            <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-amber-100 dark:bg-amber-950/70 text-amber-600 dark:text-amber-400 flex items-center justify-center flex-shrink-0">
+              <Sparkles className="w-4 h-4 sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block leading-tight">Loyalty Points</span>
-              <span className="text-2xl font-black font-fredoka text-amber-600 dark:text-amber-400">
+            <div className="min-w-0 flex-1">
+              <span className="text-[11px] sm:text-xs font-bold text-slate-500 dark:text-slate-400 block leading-tight truncate">Loyalty Points</span>
+              <span className="text-lg sm:text-2xl font-black font-fredoka text-amber-600 dark:text-amber-400 truncate block">
                 {totalPointsCirculation} pt
               </span>
-              <span className="text-[10px] text-slate-400 block">Issued on customer orders</span>
+              <span className="text-[9px] sm:text-[10px] text-slate-400 block truncate">Issued on orders</span>
             </div>
           </div>
         </div>
@@ -1203,16 +1736,16 @@ export default function AdminPage() {
             </div>
 
             {/* Low Stock Products Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
               {lowStockProducts.map((prod) => {
                 const isOutOfStock = prod.stock <= 0;
                 return (
                   <div
                     key={`low-stock-${prod.id}`}
-                    className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-800/80 shadow-xs flex flex-col justify-between gap-3 hover:border-rose-500 transition-all"
+                    className="p-2.5 sm:p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-800/80 shadow-xs flex flex-col justify-between gap-2 sm:gap-3 hover:border-rose-500 transition-all"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex-shrink-0">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3">
+                      <div className="relative w-10 h-10 sm:w-12 sm:h-12 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex-shrink-0">
                         <Image
                           src={prod.image || "/assets/logo.jpg"}
                           alt={prod.name}
@@ -1221,27 +1754,27 @@ export default function AdminPage() {
                           unoptimized={Boolean(prod.image?.startsWith("data:"))}
                         />
                       </div>
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-0 flex-1 w-full">
                         <h4 className="font-bold text-xs text-slate-900 dark:text-white truncate font-fredoka">
                           {prod.name}
                         </h4>
-                        <div className="flex items-center gap-1.5 mt-0.5 text-[10px]">
+                        <div className="flex items-center gap-1 sm:gap-1.5 mt-0.5 text-[9px] sm:text-[10px]">
                           {prod.code && (
-                            <span className="font-mono font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 px-1 rounded">
+                            <span className="font-mono font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 px-1 rounded truncate">
                               {prod.code}
                             </span>
                           )}
-                          <span className="text-slate-400 capitalize">{prod.cat}</span>
+                          <span className="text-slate-400 capitalize truncate">{prod.cat}</span>
                         </div>
                         <div className="mt-1">
                           <span
-                            className={`inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full ${
+                            className={`inline-flex items-center gap-1 text-[9px] sm:text-[10px] font-black px-1.5 sm:px-2 py-0.5 rounded-full ${
                               isOutOfStock
                                 ? "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-800 animate-pulse"
                                 : "bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800"
                             }`}
                           >
-                            <span>{isOutOfStock ? "❌ Out of Stock (0)" : `⚠️ Only ${prod.stock} left in stock!`}</span>
+                            <span>{isOutOfStock ? "❌ Out of Stock" : `⚠️ ${prod.stock} left`}</span>
                           </span>
                         </div>
                       </div>
@@ -1315,21 +1848,21 @@ export default function AdminPage() {
         )}
 
         {/* Tab Navigation Pill Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800">
-          <div className="flex gap-2">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-2 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto max-w-full pb-2 scrollbar-none -mx-2 px-2 touch-pan-x flex-nowrap">
             <button
               onClick={() => {
                 sounds.playPop();
                 setActiveTab("products");
               }}
-              className={`px-5 py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-2 ${
+              className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap flex-shrink-0 ${
                 activeTab === "products"
                   ? "bg-emerald-600 text-white shadow-toy-green-glow"
                   : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border border-slate-200 dark:border-slate-800"
               }`}
             >
               <Package className="w-4 h-4" />
-              <span>Products & Catalog ({products.length})</span>
+              <span>Products ({products.length})</span>
             </button>
 
             <button
@@ -1337,14 +1870,14 @@ export default function AdminPage() {
                 sounds.playPop();
                 setActiveTab("orders");
               }}
-              className={`px-5 py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-2 ${
+              className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap flex-shrink-0 ${
                 activeTab === "orders"
                   ? "bg-emerald-600 text-white shadow-toy-green-glow"
                   : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border border-slate-200 dark:border-slate-800"
               }`}
             >
               <ShoppingBag className="w-4 h-4" />
-              <span>Customer Orders ({orders.length})</span>
+              <span>Orders ({orders.length})</span>
               {pendingOrdersCount > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 font-black text-[10px]">
                   {pendingOrdersCount}
@@ -1357,14 +1890,14 @@ export default function AdminPage() {
                 sounds.playPop();
                 setActiveTab("bracelet_studio");
               }}
-              className={`px-5 py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-2 whitespace-nowrap ${
+              className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap flex-shrink-0 ${
                 activeTab === "bracelet_studio"
                   ? "bg-emerald-600 text-white shadow-toy-green-glow"
                   : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border border-slate-200 dark:border-slate-800"
               }`}
             >
               <Layers className="w-4 h-4 text-emerald-400" />
-              <span>Customize Bracelet Studio 🔗</span>
+              <span>Bracelet Studio 🔗</span>
             </button>
 
             <button
@@ -1372,14 +1905,14 @@ export default function AdminPage() {
                 sounds.playPop();
                 setActiveTab("charms");
               }}
-              className={`px-5 py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-2 whitespace-nowrap ${
+              className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap flex-shrink-0 ${
                 activeTab === "charms"
                   ? "bg-emerald-600 text-white shadow-toy-green-glow"
                   : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border border-slate-200 dark:border-slate-800"
               }`}
             >
               <Sparkles className="w-4 h-4 text-toy-yellow" />
-              <span>Italy Charms ({charms ? charms.length : 0})</span>
+              <span>Charms ({charms ? charms.length : 0})</span>
             </button>
 
             <button
@@ -1387,7 +1920,7 @@ export default function AdminPage() {
                 sounds.playPop();
                 setActiveTab("vouchers");
               }}
-              className={`px-5 py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-2 whitespace-nowrap ${
+              className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap flex-shrink-0 ${
                 activeTab === "vouchers"
                   ? "bg-emerald-600 text-white shadow-toy-green-glow"
                   : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border border-slate-200 dark:border-slate-800"
@@ -1396,19 +1929,20 @@ export default function AdminPage() {
               <Ticket className="w-4 h-4" />
               <span>Vouchers ({vouchers.length})</span>
             </button>
+
             <button
               onClick={() => {
                 sounds.playPop();
                 setActiveTab("category_boxes");
               }}
-              className={`px-5 py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-2 whitespace-nowrap ${
+              className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap flex-shrink-0 ${
                 activeTab === "category_boxes"
                   ? "bg-emerald-600 text-white shadow-toy-green-glow"
                   : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border border-slate-200 dark:border-slate-800"
               }`}
             >
               <Images className="w-4 h-4 text-emerald-400" />
-              <span>Category Bento Boxes ({categoryBoxes ? categoryBoxes.length : 0})</span>
+              <span>Bento Boxes ({categoryBoxes ? categoryBoxes.length : 0})</span>
             </button>
 
             <button
@@ -1416,19 +1950,69 @@ export default function AdminPage() {
                 sounds.playPop();
                 setActiveTab("categories");
               }}
-              className={`px-5 py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-2 whitespace-nowrap ${
+              className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-2xl font-black font-fredoka text-xs sm:text-sm transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap flex-shrink-0 ${
                 activeTab === "categories"
                   ? "bg-emerald-600 text-white shadow-toy-green-glow"
                   : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border border-slate-200 dark:border-slate-800"
               }`}
             >
               <SlidersHorizontal className="w-4 h-4 text-emerald-400" />
-              <span>Product Filters ({categories ? categories.length : 0})</span>
+              <span>Categories ({categories ? categories.length : 0})</span>
             </button>
           </div>
 
           {activeTab === "products" && (
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full lg:w-auto">
+              {/* Choice 1: Bulk Photo Upload (1 Photo = 1 Product) */}
+              <button
+                type="button"
+                onClick={handleTriggerBulkPhotoUpload}
+                className="py-2.5 px-3 sm:px-4 rounded-xl sm:rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black font-fredoka text-xs sm:text-sm shadow-md shadow-indigo-500/20 flex items-center justify-center gap-1.5 hover:scale-102 active:scale-95 transition-all cursor-pointer ring-2 ring-indigo-400/50"
+                title="Select 10+ photos from your device to upload 10+ different products with batch editing"
+              >
+                <Images className="w-4 h-4 text-amber-300 animate-pulse" />
+                <span>Bulk Upload (10+ Photos) 📸</span>
+              </button>
+
+              {bulkPhotoItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    sounds.playPop();
+                    setBulkModalTab("photos");
+                    setBulkModalOpen(true);
+                  }}
+                  className="py-2.5 px-3 sm:px-3.5 rounded-xl sm:rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black font-fredoka text-xs sm:text-sm shadow-md flex items-center justify-center gap-1.5 active:scale-95 transition-all animate-bounce"
+                  title="You have unsaved bulk products. Click to review and publish!"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Resume Batch ({bulkPhotoItems.length})</span>
+                </button>
+              )}
+
+              {/* Choice 2: Add Single Toy (One by One) */}
+              <button
+                type="button"
+                onClick={handleOpenAddProduct}
+                className="py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl sm:rounded-2xl bg-gradient-to-r from-emerald-500 via-green-600 to-emerald-800 text-white font-black font-fredoka text-xs sm:text-sm shadow-toy-green-glow flex items-center justify-center gap-1.5 sm:gap-2 hover:scale-102 active:scale-95 transition-all cursor-pointer"
+                title="Upload one product at a time with optional multi-photo gallery"
+              >
+                <Plus className="w-3.5 sm:w-4 h-3.5 sm:h-4" />
+                <span>Add 1 by 1</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  sounds.playPop();
+                  setActiveTab("bracelet_studio");
+                }}
+                className="py-2 px-3 sm:px-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-black font-fredoka text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all active:scale-95"
+                title="Open Custom Bracelet Studio to assemble & add bracelets"
+              >
+                <Layers className="w-3.5 h-3.5 text-amber-300" />
+                <span className="truncate">Assemble Bracelet 🔗</span>
+              </button>
+
               {products.length > 0 && (
                 <button
                   type="button"
@@ -1439,38 +2023,18 @@ export default function AdminPage() {
                       showToast("All products wiped from database. Catalog is now empty.");
                     }
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-300 font-bold text-xs flex items-center gap-1.5 transition-all border border-rose-200 dark:border-rose-800/50"
+                  className="py-2 px-3 sm:px-3.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all border border-rose-200 dark:border-rose-800/50"
                   title="Wipe all products from database (Leave nothing behind)"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Wipe All Products</span>
+                  <span className="truncate">Wipe All</span>
                 </button>
               )}
-
-              <button
-                onClick={() => {
-                  sounds.playPop();
-                  setActiveTab("bracelet_studio");
-                }}
-                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-black font-fredoka text-xs flex items-center gap-1.5 shadow-sm transition-all active:scale-95"
-                title="Open Custom Bracelet Studio to assemble & add bracelets"
-              >
-                <Layers className="w-3.5 h-3.5 text-amber-300" />
-                <span>Assemble Bracelet Product 🔗</span>
-              </button>
-
-              <button
-                onClick={handleOpenAddProduct}
-                className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-500 via-green-600 to-emerald-800 text-white font-black font-fredoka text-xs sm:text-sm shadow-toy-green-glow flex items-center gap-2 hover:scale-102 active:scale-95 transition-all"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add New Toy</span>
-              </button>
             </div>
           )}
 
           {activeTab === "bracelet_studio" && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={handleOpenAddCharm}
                 className="px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black font-fredoka text-xs sm:text-sm shadow-md transition-all flex items-center gap-1.5 active:scale-95"
@@ -1482,7 +2046,7 @@ export default function AdminPage() {
           )}
 
           {activeTab === "charms" && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => {
                   if (confirm("Clear all charms from inventory?")) {
@@ -1509,7 +2073,7 @@ export default function AdminPage() {
           )}
 
           {activeTab === "category_boxes" && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={handleResetBoxes}
                 className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-all border border-slate-200 dark:border-slate-700"
@@ -1602,15 +2166,15 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Products Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {/* Products Grid: 2 columns on mobile phone, 2 on tablet, 3-4 on desktop */}
+            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-4">
               {filteredProducts.map((prod) => {
                 const discountedPrice = prod.discount > 0 ? prod.price * (1 - prod.discount / 100) : prod.price;
 
                 return (
                   <div
                     key={prod.id}
-                    className={`p-4 rounded-3xl bg-white dark:bg-slate-900 border transition-all flex flex-col justify-between shadow-sm ${
+                    className={`p-2.5 sm:p-4 rounded-2xl sm:rounded-3xl bg-white dark:bg-slate-900 border transition-all flex flex-col justify-between shadow-sm ${
                       prod.stock < 5
                         ? "border-amber-400 dark:border-amber-700/80 ring-2 ring-amber-400/20 shadow-amber-500/5"
                         : "border-slate-200 dark:border-slate-800 hover:border-emerald-500 dark:hover:border-slate-700"
@@ -1618,7 +2182,7 @@ export default function AdminPage() {
                   >
                     <div>
                       {/* Image Preview */}
-                      <div className="relative w-full aspect-square rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 mb-3">
+                      <div className="relative w-full aspect-square rounded-xl sm:rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 mb-2 sm:mb-3">
                         <Image
                           src={prod.image}
                           alt={prod.name}
@@ -1627,51 +2191,51 @@ export default function AdminPage() {
                           unoptimized={Boolean(prod.image?.startsWith("data:"))}
                         />
                         {prod.discount > 0 && (
-                          <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-lg bg-rose-500 text-white text-[10px] font-black uppercase">
-                            -{prod.discount}% OFF
+                          <span className="absolute top-1.5 left-1.5 sm:top-2.5 sm:left-2.5 px-1.5 sm:px-2 py-0.5 rounded-md sm:rounded-lg bg-rose-500 text-white text-[9px] sm:text-[10px] font-black uppercase">
+                            -{prod.discount}%
                           </span>
                         )}
                         {prod.images && prod.images.length > 1 && (
-                          <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-[10px] font-bold flex items-center gap-1 shadow-xs">
-                            <Images className="w-3 h-3 text-emerald-400" />
-                            <span>{prod.images.length} photos</span>
+                          <span className="absolute top-1.5 right-1.5 sm:top-2.5 sm:right-2.5 px-1.5 sm:px-2 py-0.5 rounded-md sm:rounded-lg bg-black/75 backdrop-blur-sm text-white text-[8px] sm:text-[10px] font-bold flex items-center gap-1 shadow-xs">
+                            <Images className="w-2.5 sm:w-3 h-2.5 sm:h-3 text-emerald-400" />
+                            <span>{prod.images.length}</span>
                           </span>
                         )}
-                        <span className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-amber-300 text-[10px] font-bold">
-                          +{prod.pt} VIP pt
+                        <span className="absolute bottom-1.5 left-1.5 sm:bottom-2.5 sm:left-2.5 px-1.5 sm:px-2 py-0.5 rounded-md sm:rounded-lg bg-black/75 backdrop-blur-sm text-amber-300 text-[8px] sm:text-[10px] font-bold">
+                          +{prod.pt} pt
                         </span>
                       </div>
 
                       {/* Info */}
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                      <div className="space-y-0.5 sm:space-y-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 truncate">
                             {prod.cat}
                           </span>
                           {prod.code && (
-                            <span className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 font-mono font-bold text-[10px] border border-emerald-300 dark:border-emerald-700/50">
-                              CODE: {prod.code}
+                            <span className="px-1.5 sm:px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 font-mono font-bold text-[8px] sm:text-[10px] border border-emerald-300 dark:border-emerald-700/50 truncate">
+                              {prod.code}
                             </span>
                           )}
                         </div>
-                        <h4 className="font-black text-sm font-fredoka text-slate-900 dark:text-white line-clamp-1">
+                        <h4 className="font-black text-xs sm:text-sm font-fredoka text-slate-900 dark:text-white line-clamp-1">
                           {prod.name}
                         </h4>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium line-clamp-1">
+                        <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-medium line-clamp-1">
                           {prod.nameKh || prod.bio}
                         </p>
 
-                        <div className="flex items-baseline gap-2 pt-1">
-                          <span className="text-base font-black text-amber-600 dark:text-toy-yellow font-fredoka">
+                        <div className="flex flex-wrap items-baseline gap-1 sm:gap-2 pt-0.5 sm:pt-1">
+                          <span className="text-sm sm:text-base font-black text-amber-600 dark:text-toy-yellow font-fredoka">
                             {formatPrice(discountedPrice, currency)}
                           </span>
                           {prod.discount > 0 && (
-                            <span className="text-xs line-through text-slate-400">
+                            <span className="text-[10px] sm:text-xs line-through text-slate-400">
                               {formatPrice(prod.price, currency)}
                             </span>
                           )}
                           <span
-                            className={`ml-auto text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                            className={`ml-auto text-[8px] sm:text-[10px] font-extrabold px-1.5 sm:px-2 py-0.5 rounded-md ${
                               prod.stock === 0
                                 ? "bg-rose-100 text-rose-700 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800"
                                 : prod.stock < 5
@@ -1679,19 +2243,19 @@ export default function AdminPage() {
                                 : "text-slate-500 font-bold"
                             }`}
                           >
-                            {prod.stock === 0 ? "Out of Stock" : prod.stock < 5 ? `⚠️ Low: ${prod.stock}` : `Stock: ${prod.stock}`}
+                            {prod.stock === 0 ? "Out" : prod.stock < 5 ? `⚠️ ${prod.stock}` : `Stock: ${prod.stock}`}
                           </span>
                         </div>
                       </div>
                     </div>
 
                     {/* Action Buttons */}
-                    <div className="pt-3 mt-3 border-t border-slate-100 dark:border-slate-800 flex gap-2">
+                    <div className="pt-2 sm:pt-3 mt-2 sm:mt-3 border-t border-slate-100 dark:border-slate-800 flex gap-1.5 sm:gap-2">
                       <button
                         onClick={() => handleOpenEditProduct(prod)}
-                        className="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+                        className="flex-1 py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 transition-all"
                       >
-                        <Edit2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        <Edit2 className="w-3 sm:w-3.5 h-3 sm:h-3.5 text-emerald-600 dark:text-emerald-400" />
                         <span>Edit</span>
                       </button>
 
@@ -1703,16 +2267,46 @@ export default function AdminPage() {
                             showToast(`Deleted "${prod.name}" from store.`);
                           }
                         }}
-                        className="py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 font-bold text-xs flex items-center justify-center gap-1.5 transition-all border border-rose-200 dark:border-rose-900/40"
+                        className="py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 transition-all border border-rose-200 dark:border-rose-900/40"
                         title="Delete product from store"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete</span>
+                        <Trash2 className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+                        <span className="hidden sm:inline">Delete</span>
                       </button>
                     </div>
                   </div>
                 );
               })}
+
+              {filteredProducts.length === 0 && (
+                <div className="col-span-full py-12 px-4 text-center rounded-3xl border-2 border-dashed border-slate-300 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 flex flex-col items-center justify-center">
+                  <div className="w-16 h-16 rounded-3xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-500 flex items-center justify-center mb-3">
+                    <Images className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800 dark:text-slate-200">No products found</h3>
+                  <p className="text-xs text-slate-500 max-w-sm mt-1 mb-4">
+                    Upload your products using Bulk Upload (select 10+ photos from your device) or add them one by one.
+                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTriggerBulkPhotoUpload}
+                      className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-black font-fredoka text-xs shadow-md flex items-center gap-2 cursor-pointer active:scale-95 transition-all"
+                    >
+                      <Images className="w-4 h-4 text-amber-300" />
+                      <span>Bulk Upload (10+ Photos) 📸</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenAddProduct}
+                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black font-fredoka text-xs shadow-md flex items-center gap-2 cursor-pointer active:scale-95 transition-all"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add 1 by 1</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -2235,35 +2829,35 @@ export default function AdminPage() {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-4">
                 {filteredCharms.map((charm) => (
                   <div
                     key={charm.id}
-                    className="p-4 rounded-3xl bg-black dark:bg-black border border-zinc-800 shadow-md hover:shadow-lg hover:border-emerald-500/50 transition-all flex flex-col justify-between group"
+                    className="p-2.5 sm:p-4 rounded-2xl sm:rounded-3xl bg-black dark:bg-black border border-zinc-800 shadow-md hover:shadow-lg hover:border-emerald-500/50 transition-all flex flex-col justify-between group"
                   >
                     {/* Top Row: Category badge, Charm Code & popularity */}
-                    <div className="flex items-center justify-between text-xs mb-3">
-                      <div className="flex items-center gap-1.5">
-                        <span className="px-2.5 py-0.5 rounded-full bg-zinc-900 text-zinc-300 text-[10px] font-bold uppercase tracking-wider border border-zinc-700">
+                    <div className="flex items-center justify-between text-xs mb-2 sm:mb-3 gap-1">
+                      <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
+                        <span className="px-1.5 sm:px-2.5 py-0.5 rounded-full bg-zinc-900 text-zinc-300 text-[8px] sm:text-[10px] font-bold uppercase tracking-wider border border-zinc-700 truncate">
                           {charm.category}
                         </span>
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-950/80 text-emerald-300 font-mono font-black text-[10px] border border-emerald-700/60">
+                        <span className="px-1.5 sm:px-2 py-0.5 rounded-md bg-emerald-950/80 text-emerald-300 font-mono font-black text-[8px] sm:text-[10px] border border-emerald-700/60 truncate">
                           #{getCharmCode(charm)}
                         </span>
                       </div>
                       {charm.isPopular && (
-                        <span className="px-2 py-0.5 rounded-full bg-amber-950/60 text-amber-300 text-[10px] font-black border border-amber-700/60 flex items-center gap-1">
+                        <span className="px-1.5 sm:px-2 py-0.5 rounded-full bg-amber-950/60 text-amber-300 text-[8px] sm:text-[10px] font-black border border-amber-700/60 flex items-center gap-1 flex-shrink-0">
                           <span>⭐</span>
-                          <span>Popular</span>
+                          <span className="hidden sm:inline">Popular</span>
                         </span>
                       )}
                     </div>
 
                     {/* Center Preview: Side-by-Side Face Photo & Bracelet Link Inlay */}
-                    <div className="flex items-center justify-around py-3 px-2 bg-zinc-950/80 rounded-2xl border border-zinc-800 my-2">
+                    <div className="flex items-center justify-around py-2 sm:py-3 px-1 sm:px-2 bg-zinc-950/80 rounded-xl sm:rounded-2xl border border-zinc-800 my-1.5 sm:my-2">
                       {/* Left: Charm Face (Uploaded Photo) */}
                       <div className="flex flex-col items-center">
-                        <div className="relative w-12 h-10 rounded-lg overflow-hidden border border-zinc-700 bg-black shadow-xs mb-1">
+                        <div className="relative w-9 h-8 sm:w-12 sm:h-10 rounded-lg overflow-hidden border border-zinc-700 bg-black shadow-xs mb-1">
                           <Image
                             src={charm.image || "/assets/charm_clean.png"}
                             alt={charm.name}
@@ -2272,12 +2866,12 @@ export default function AdminPage() {
                             unoptimized={Boolean(charm.image?.startsWith("data:"))}
                           />
                         </div>
-                        <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-tight">
-                          Face Photo
+                        <span className="text-[8px] sm:text-[9px] font-bold text-zinc-400 uppercase tracking-tight">
+                          Face
                         </span>
                       </div>
 
-                      <div className="h-8 w-px bg-zinc-800" />
+                      <div className="h-6 sm:h-8 w-px bg-zinc-800" />
 
                       {/* Right: Bracelet Link Inlay (Cut-Out) */}
                       <div className="flex flex-col items-center">
@@ -2285,50 +2879,50 @@ export default function AdminPage() {
                           charm={charm}
                           slotIndex={0}
                           finish="silver"
-                          size="preview"
+                          size="compact"
                         />
-                        <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-tight mt-1">
-                          Bracelet Link
+                        <span className="text-[8px] sm:text-[9px] font-bold text-emerald-400 uppercase tracking-tight mt-0.5 sm:mt-1">
+                          Link
                         </span>
                       </div>
                     </div>
 
                     {/* Charm Info */}
-                    <div className="space-y-1 my-2">
-                      <h4 className="font-black text-sm font-fredoka text-white line-clamp-1">
+                    <div className="space-y-0.5 sm:space-y-1 my-1 sm:my-2">
+                      <h4 className="font-black text-xs sm:text-sm font-fredoka text-white line-clamp-1">
                         {charm.name}
                       </h4>
                       {charm.nameKh && (
-                        <p className="text-xs text-zinc-400 line-clamp-1">
+                        <p className="text-[10px] sm:text-xs text-zinc-400 line-clamp-1">
                           {charm.nameKh}
                         </p>
                       )}
-                      <div className="flex items-center justify-between pt-1">
-                        <span className="text-base font-black font-fredoka text-amber-400">
+                      <div className="flex items-center justify-between pt-0.5 sm:pt-1">
+                        <span className="text-sm sm:text-base font-black font-fredoka text-amber-400">
                           {formatPrice(charm.price, currency)}
                         </span>
-                        <span className="text-[10px] text-zinc-400 font-mono">
-                          ID: {charm.id.slice(0, 14)}
+                        <span className="text-[9px] sm:text-[10px] text-zinc-400 font-mono truncate max-w-[80px]">
+                          {charm.id.slice(0, 10)}
                         </span>
                       </div>
                     </div>
 
                     {/* Action Buttons */}
-                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center gap-2">
+                    <div className="pt-2 sm:pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center gap-1.5 sm:gap-2">
                       <button
                         onClick={() => handleOpenEditCharm(charm)}
-                        className="flex-1 py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+                        className="flex-1 py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 sm:gap-1.5 transition-all"
                       >
-                        <Edit2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        <Edit2 className="w-3 sm:w-3.5 h-3 sm:h-3.5 text-emerald-600 dark:text-emerald-400" />
                         <span>Edit</span>
                       </button>
                       <button
                         onClick={() => handleDeleteCharm(charm.id, charm.name)}
-                        className="py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all border border-rose-200 dark:border-rose-900/40"
+                        className="py-1.5 sm:py-2 px-2 sm:px-3 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-300 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 sm:gap-1.5 transition-all border border-rose-200 dark:border-rose-900/40"
                         title="Delete charm from store"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete</span>
+                        <Trash2 className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+                        <span className="hidden sm:inline">Delete</span>
                       </button>
                     </div>
                   </div>
@@ -2811,6 +3405,603 @@ export default function AdminPage() {
       </main>
 
       {/* ==================================================== */}
+      {/* MODAL: BULK UPLOAD PRODUCTS                          */}
+      {/* ==================================================== */}
+      <AnimatePresence>
+        {bulkModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-5xl bg-white dark:bg-slate-900 border-2 border-indigo-500/50 dark:border-indigo-500/40 rounded-3xl p-4 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[92vh] flex flex-col pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]"
+            >
+              <button
+                onClick={() => setBulkModalOpen(false)}
+                className="absolute top-4 right-4 sm:top-5 sm:right-5 w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors z-10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              {/* Modal Header */}
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 text-white flex items-center justify-center shadow-md">
+                  <Images className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-black font-fredoka text-slate-900 dark:text-white">
+                    Bulk Product Upload 📦
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Upload multiple products at once. Select multiple photos to create multiple products, or import via spreadsheet.
+                  </p>
+                </div>
+              </div>
+
+              {/* Mode Switcher Tabs */}
+              <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3 mb-4 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setBulkModalTab("photos")}
+                  className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black font-fredoka flex items-center gap-2 transition-all cursor-pointer ${
+                    bulkModalTab === "photos"
+                      ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+                >
+                  <Images className="w-4 h-4" />
+                  <span>Bulk Photos (1 Photo = 1 Product)</span>
+                  {bulkPhotoItems.length > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-white text-indigo-700 text-[10px] font-mono font-bold">
+                      {bulkPhotoItems.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBulkModalTab("csv")}
+                  className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black font-fredoka flex items-center gap-2 transition-all cursor-pointer ${
+                    bulkModalTab === "csv"
+                      ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                  }`}
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>Spreadsheet (CSV / JSON)</span>
+                </button>
+              </div>
+
+              {/* TAB 1: MULTI-PHOTO UPLOAD (1 Photo = 1 Product) */}
+              {bulkModalTab === "photos" && (
+                <div className="flex-1 flex flex-col min-h-0">
+                  {bulkPhotoItems.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-12 rounded-3xl border-2 border-dashed border-indigo-400/60 dark:border-indigo-600/40 bg-indigo-50/40 dark:bg-indigo-950/20 text-center my-auto">
+                      <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-3xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/25 mb-4">
+                        <Images className="w-8 h-8 sm:w-10 sm:h-10 text-amber-300" />
+                      </div>
+                      <h3 className="text-lg sm:text-xl font-black font-fredoka text-slate-900 dark:text-white mb-2">
+                        Select 10+ Photos from Device (Each Photo = 1 Product)
+                      </h3>
+                      <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-md mb-6 leading-relaxed">
+                        Pick multiple photos from your computer or phone. Each photo automatically creates a separate product where you can edit its name, category, price, and stock before saving all at once!
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={handleTriggerBulkPhotoUpload}
+                        className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black font-fredoka text-sm shadow-xl hover:scale-102 active:scale-95 transition-all cursor-pointer flex items-center gap-2"
+                      >
+                        <Upload className="w-4 h-4" />
+                        <span>Select Multiple Photos (e.g. 10 photos)</span>
+                      </button>
+                      {bulkIsProcessingImages && (
+                        <div className="flex items-center gap-2 mt-4 text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Optimizing and loading photos...</span>
+                        </div>
+                      )}
+                      <p className="text-[11px] text-slate-400 mt-3">
+                        Tip: Hold Shift or Ctrl/Cmd to select 10, 20 or more pictures at once from your gallery.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex flex-col min-h-0">
+                      {/* Batch Apply Actions Toolbar */}
+                      <div className="p-3 sm:p-4 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/60 mb-3 flex flex-col gap-2.5 flex-shrink-0">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black font-fredoka text-indigo-900 dark:text-indigo-200 uppercase tracking-wider">
+                              Batch Actions ({bulkPhotoItems.length} Products):
+                            </span>
+                            <span className="text-[11px] text-slate-500 hidden sm:inline">
+                              Apply common settings to all products with 1 click:
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleTriggerBulkPhotoUpload}
+                              className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-slate-700 text-indigo-600 dark:text-indigo-300 font-black font-fredoka text-xs border border-indigo-200 dark:border-indigo-800 flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>+ Add More Photos</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm("Clear all draft products in this batch?")) {
+                                  setBulkPhotoItems([]);
+                                  sounds.playPop();
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
+                            >
+                              Clear All
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {/* Global Category */}
+                          <div className="flex gap-1.5 items-center bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-indigo-100 dark:border-indigo-900">
+                            <select
+                              value={bulkGlobalCat}
+                              onChange={(e) => setBulkGlobalCat(e.target.value)}
+                              className="flex-1 px-2 py-1 text-xs bg-transparent border-0 outline-none text-slate-800 dark:text-slate-200 font-bold cursor-pointer"
+                            >
+                              {categories.filter(c => c.id !== "all").map(c => (
+                                <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={handleApplyCatToAll}
+                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black font-fredoka whitespace-nowrap active:scale-95 cursor-pointer"
+                            >
+                              Apply Cat
+                            </button>
+                          </div>
+
+                          {/* Global Price */}
+                          <div className="flex gap-1.5 items-center bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-indigo-100 dark:border-indigo-900">
+                            <span className="text-xs font-bold text-slate-400 pl-1.5">$</span>
+                            <input
+                              type="number"
+                              step="0.1"
+                              value={bulkGlobalPrice}
+                              onChange={(e) => setBulkGlobalPrice(e.target.value)}
+                              placeholder="Price for all"
+                              className="w-full px-1 py-1 text-xs bg-transparent border-0 outline-none text-slate-800 dark:text-slate-200 font-bold"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleApplyPriceToAll}
+                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black font-fredoka whitespace-nowrap active:scale-95 cursor-pointer"
+                            >
+                              Apply Price
+                            </button>
+                          </div>
+
+                          {/* Global Stock */}
+                          <div className="flex gap-1.5 items-center bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-indigo-100 dark:border-indigo-900">
+                            <span className="text-xs font-bold text-slate-400 pl-1.5">Qty</span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={bulkGlobalStock}
+                              onChange={(e) => setBulkGlobalStock(e.target.value)}
+                              placeholder="Stock for all"
+                              className="w-full px-1 py-1 text-xs bg-transparent border-0 outline-none text-slate-800 dark:text-slate-200 font-bold"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleApplyStockToAll}
+                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black font-fredoka whitespace-nowrap active:scale-95 cursor-pointer"
+                            >
+                              Apply Stock
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Product Batch Cards List */}
+                      <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 min-h-0">
+                        {bulkPhotoItems.map((item, idx) => (
+                          <div
+                            key={item.tempId}
+                            className="p-3 sm:p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center gap-3 hover:border-indigo-300 dark:hover:border-indigo-800 transition-all"
+                          >
+                            {/* Photo Thumbnail */}
+                            <div className="relative group w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden bg-slate-200 dark:bg-slate-800 border-2 border-slate-300 dark:border-slate-700 flex-shrink-0 shadow-sm">
+                              <Image
+                                src={item.image}
+                                alt={item.name || "Product"}
+                                fill
+                                className="object-cover"
+                                unoptimized={Boolean(item.image?.startsWith("data:"))}
+                              />
+                              <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded-md bg-black/70 text-white font-mono text-[9px] font-bold">
+                                #{idx + 1}
+                              </span>
+                              <label
+                                title="Click to replace photo for this product"
+                                className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-md bg-black/80 hover:bg-black text-white text-[9px] font-bold cursor-pointer flex items-center gap-0.5 shadow-md active:scale-95 transition-all"
+                              >
+                                <Upload className="w-2.5 h-2.5 text-amber-300" />
+                                <span>Edit</span>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                      await handleReplaceSinglePhoto(idx, file);
+                                    }
+                                  }}
+                                />
+                              </label>
+                            </div>
+
+                            {/* Editable Fields */}
+                            <div className="flex-1 grid grid-cols-1 sm:grid-cols-12 gap-2 w-full min-w-0">
+                              {/* SKU Code */}
+                              <div className="sm:col-span-2">
+                                <label className="text-[10px] font-bold text-slate-500 block mb-0.5">
+                                  SKU Code
+                                </label>
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="text"
+                                    value={item.code}
+                                    onChange={(e) => updateBulkPhotoItem(idx, { code: e.target.value.toUpperCase() })}
+                                    className="w-full px-2 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Name EN */}
+                              <div className="sm:col-span-4">
+                                <label className="text-[10px] font-bold text-slate-500 block mb-0.5">
+                                  Toy Name (English) *
+                                </label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={item.name}
+                                  onChange={(e) => updateBulkPhotoItem(idx, { name: e.target.value })}
+                                  placeholder="e.g. Cyber Mecha Titan"
+                                  className={`w-full px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-900 border text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-indigo-500 ${
+                                    !item.name.trim() ? "border-rose-400 dark:border-rose-600 bg-rose-50/50" : "border-slate-200 dark:border-slate-800"
+                                  }`}
+                                />
+                              </div>
+
+                              {/* Category */}
+                              <div className="sm:col-span-3">
+                                <label className="text-[10px] font-bold text-slate-500 block mb-0.5">
+                                  Category *
+                                </label>
+                                <select
+                                  value={item.cat}
+                                  onChange={(e) => updateBulkPhotoItem(idx, { cat: e.target.value })}
+                                  className="w-full px-2 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-indigo-500 cursor-pointer"
+                                >
+                                  {categories.filter(c => c.id !== "all").map(c => (
+                                    <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {/* Price */}
+                              <div className="sm:col-span-1.5">
+                                <label className="text-[10px] font-bold text-slate-500 block mb-0.5">
+                                  Price ($)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  value={item.price}
+                                  onChange={(e) => updateBulkPhotoItem(idx, { price: e.target.value })}
+                                  className="w-full px-2 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 outline-none focus:border-indigo-500"
+                                />
+                              </div>
+
+                              {/* Stock */}
+                              <div className="sm:col-span-1.5">
+                                <label className="text-[10px] font-bold text-slate-500 block mb-0.5">
+                                  Stock
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={item.stock}
+                                  onChange={(e) => updateBulkPhotoItem(idx, { stock: e.target.value })}
+                                  className="w-full px-2 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-mono text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Delete Button */}
+                            <button
+                              type="button"
+                              onClick={() => removeBulkPhotoItem(idx)}
+                              className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-rose-100 dark:hover:bg-rose-950 text-slate-500 hover:text-rose-600 flex items-center justify-center transition-colors flex-shrink-0 self-end sm:self-center cursor-pointer"
+                              title="Remove this product from batch"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Bottom Action Footer for Multi-Photo */}
+                      <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 flex-shrink-0">
+                        <div className="text-xs text-slate-500 flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                          <span>
+                            <strong>{bulkPhotoItems.filter(p => p.name.trim()).length}</strong> of <strong>{bulkPhotoItems.length}</strong> products ready to publish
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                          <button
+                            type="button"
+                            onClick={() => setBulkModalOpen(false)}
+                            className="flex-1 sm:flex-none px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold transition-all cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleSaveAllBulkPhotos}
+                            disabled={bulkIsSubmitting || bulkPhotoItems.length === 0 || bulkPhotoItems.some(p => !p.name.trim())}
+                            className="flex-1 sm:flex-none px-6 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-500 via-green-600 to-emerald-800 hover:from-emerald-400 hover:to-green-500 disabled:opacity-50 text-white font-black font-fredoka text-xs sm:text-sm shadow-toy-green-glow flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer"
+                          >
+                            <Check className="w-4 h-4" />
+                            <span>
+                              {bulkIsSubmitting ? "Publishing..." : `Save & Publish All ${bulkPhotoItems.length} Products 🚀`}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2: SPREADSHEET (CSV / JSON) */}
+              {bulkModalTab === "csv" && (
+                <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+                  {/* Action Toolbar: Template Download & Preset Samples & File Picker */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 my-2 p-3 rounded-2xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/60">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={handleDownloadCsvTemplate}
+                        className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-slate-700 text-blue-700 dark:text-blue-300 font-bold border border-blue-200 dark:border-blue-800/80 flex items-center gap-1.5 transition-all shadow-xs active:scale-95 cursor-pointer"
+                      >
+                        <span>📥 Download CSV Template</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleLoadSampleBatch}
+                        className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-slate-700 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-200 dark:border-indigo-800/80 flex items-center gap-1.5 transition-all shadow-xs active:scale-95 cursor-pointer"
+                      >
+                        <span>✨ Load 5 Sample Products</span>
+                      </button>
+
+                      <label className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black font-fredoka flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer">
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Upload .CSV / .JSON</span>
+                        <input
+                          type="file"
+                          accept=".csv,.txt,.tsv,.json"
+                          onChange={handleFileUpload}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+
+                    {/* Import Mode Toggle */}
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="font-bold text-slate-500 dark:text-slate-400 text-[11px]">Mode:</span>
+                      <button
+                        type="button"
+                        onClick={() => setBulkReplaceMode(!bulkReplaceMode)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black font-fredoka transition-all border ${
+                          bulkReplaceMode
+                            ? "bg-rose-500 text-white border-rose-600 shadow-sm"
+                            : "bg-emerald-600 text-white border-emerald-700 shadow-sm"
+                        }`}
+                      >
+                        {bulkReplaceMode ? "⚠️ Overwrite Catalog" : "➕ Append / Update"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Text / Data Input Area */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <label className="font-bold text-slate-700 dark:text-slate-300">
+                        Paste CSV Data or JSON Array:
+                      </label>
+                      <span className="text-[10px] text-slate-400">
+                        Comma, tab, or semicolon delimited
+                      </span>
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={bulkRawText}
+                      onChange={(e) => {
+                        setBulkRawText(e.target.value);
+                        parseBulkInput(e.target.value);
+                      }}
+                      placeholder="Code,Name,NameKh,Category,Price,Discount,Stock,Points,Image,Bio,BioKh..."
+                      className="w-full px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 text-base sm:text-xs font-mono text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:border-blue-500 outline-none resize-y"
+                    />
+                  </div>
+
+                  {bulkFileError && (
+                    <div className="mt-2 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs font-bold">
+                      {bulkFileError}
+                    </div>
+                  )}
+
+                  {/* Preview Table */}
+                  <div className="mt-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-black text-xs sm:text-sm font-fredoka text-slate-900 dark:text-white flex items-center gap-2">
+                        <span>Parsed Preview</span>
+                        <span className="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-mono font-black border border-blue-300 dark:border-blue-800">
+                          {bulkParsedProducts.length} items detected
+                        </span>
+                        {bulkParsedProducts.filter((p) => p._valid).length > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-mono font-black border border-emerald-300 dark:border-emerald-800">
+                            {bulkParsedProducts.filter((p) => p._valid).length} valid
+                          </span>
+                        )}
+                      </h3>
+                      {bulkParsedProducts.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBulkRawText("");
+                            setBulkParsedProducts([]);
+                          }}
+                          className="text-[11px] text-slate-400 hover:text-rose-500 transition-colors"
+                        >
+                          Clear Data
+                        </button>
+                      )}
+                    </div>
+
+                    {bulkParsedProducts.length === 0 ? (
+                      <div className="py-8 text-center rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
+                        Paste CSV or JSON, or click &quot;Load 5 Sample Products&quot; above to preview items before importing.
+                      </div>
+                    ) : (
+                      <div className="max-h-60 overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 divide-y divide-slate-200 dark:divide-slate-800">
+                        {bulkParsedProducts.map((p, idx) => (
+                          <div
+                            key={idx}
+                            className={`p-2.5 sm:p-3 flex items-center justify-between gap-3 text-xs ${
+                              p._valid ? "" : "bg-rose-50/60 dark:bg-rose-950/30"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="font-mono text-[10px] text-slate-400 w-5 flex-shrink-0">
+                                #{idx + 1}
+                              </span>
+                              <div className="relative w-9 h-9 rounded-xl overflow-hidden bg-slate-200 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 flex-shrink-0">
+                                {p.image ? (
+                                  <Image
+                                    src={p.image}
+                                    alt={p.name || "Product"}
+                                    fill
+                                    className="object-cover"
+                                    unoptimized={Boolean(p.image?.startsWith("data:"))}
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-xs">📦</div>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-black text-slate-900 dark:text-white truncate font-fredoka">
+                                    {p.name || "Untitled"}
+                                  </span>
+                                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                                    {p.code}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 mt-0.5">
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-black">
+                                    ${p.price?.toFixed(2)}
+                                  </span>
+                                  <span>• {p.cat}</span>
+                                  <span>• Stock: {p.stock}</span>
+                                  <span>• +{p.pt} pt</span>
+                                  {p.discount ? <span className="text-rose-500 font-bold">• {p.discount}% OFF</span> : null}
+                                </div>
+                                {p._errors && p._errors.length > 0 && (
+                                  <p className="text-[10px] text-rose-600 font-bold mt-0.5">
+                                    ⚠️ {p._errors.join(", ")}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {p._valid ? (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-black text-[9px] border border-emerald-300 dark:border-emerald-800">
+                                  ✓ Ready
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-black text-[9px] border border-rose-300 dark:border-rose-800">
+                                  Invalid
+                                </span>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  sounds.playPop();
+                                  setBulkParsedProducts((prev) => prev.filter((_, i) => i !== idx));
+                                }}
+                                className="p-1 rounded-lg text-slate-400 hover:text-rose-500 transition-colors"
+                                title="Remove this item from batch"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* CSV Submit Action */}
+                  <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <p className="text-xs text-slate-500 text-center sm:text-left">
+                      {bulkParsedProducts.filter((p) => p._valid).length > 0
+                        ? `Ready to import ${bulkParsedProducts.filter((p) => p._valid).length} verified products into database.`
+                        : "Add or paste products above to proceed."}
+                    </p>
+
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={() => setBulkModalOpen(false)}
+                        className="flex-1 sm:flex-none px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold transition-all"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleExecuteBulkUpload}
+                        disabled={bulkIsSubmitting || bulkParsedProducts.filter((p) => p._valid).length === 0}
+                        className="flex-1 sm:flex-none px-6 py-3 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-black font-fredoka text-xs sm:text-sm shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>
+                          {bulkIsSubmitting
+                            ? "Importing..."
+                            : `Import ${bulkParsedProducts.filter((p) => p._valid).length} Products`}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ==================================================== */}
       {/* MODAL: ADD / EDIT PRODUCT                            */}
       {/* ==================================================== */}
       <AnimatePresence>
@@ -2820,7 +4011,7 @@ export default function AdminPage() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-xl bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-6 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[92vh] overflow-y-auto"
+              className="relative w-full max-w-xl bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[90dvh] overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+1.5rem)]"
             >
               <button
                 onClick={() => setProductModalOpen(false)}
@@ -2832,9 +4023,29 @@ export default function AdminPage() {
               <h2 className="text-xl font-black font-fredoka text-slate-900 dark:text-white mb-1">
                 {editingProduct ? `Edit Toy: ${editingProduct.name}` : "Add New Toy to Storefront"}
               </h2>
-              <p className="text-xs text-slate-500 mb-5">
+              <p className="text-xs text-slate-500 mb-4">
                 Fill in toy details. Updates will immediately reflect on the live customer website.
               </p>
+
+              {!editingProduct && (
+                <div className="flex items-center p-1 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 mb-5">
+                  <div className="flex-1 py-2 px-3 rounded-xl text-xs font-black font-fredoka flex items-center justify-center gap-1.5 bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm">
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>One by One (Single Toy)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProductModalOpen(false);
+                      handleOpenBulkPhotoUpload();
+                    }}
+                    className="flex-1 py-2 px-3 rounded-xl text-xs font-black font-fredoka flex items-center justify-center gap-1.5 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+                  >
+                    <Images className="w-3.5 h-3.5 text-indigo-500" />
+                    <span>Bulk Upload (10+ Photos) 📸</span>
+                  </button>
+                </div>
+              )}
 
               <form onSubmit={handleSaveProduct} className="space-y-4">
                 {/* Product Code / SKU with Generator */}
@@ -3274,7 +4485,7 @@ export default function AdminPage() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-md bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-6 shadow-2xl text-slate-900 dark:text-white"
+              className="relative w-full max-w-md bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl text-slate-900 dark:text-white max-h-[90dvh] overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+1.5rem)]"
             >
               <button
                 onClick={() => setVoucherModalOpen(false)}
@@ -3371,7 +4582,7 @@ export default function AdminPage() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-lg bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-6 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[92vh] overflow-y-auto"
+              className="relative w-full max-w-lg bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[90dvh] overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+1.5rem)]"
             >
               <button
                 onClick={() => setCharmModalOpen(false)}
@@ -3678,7 +4889,7 @@ export default function AdminPage() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-lg bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-6 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[92vh] overflow-y-auto"
+              className="relative w-full max-w-lg bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[90dvh] overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+1.5rem)]"
             >
               <button
                 onClick={() => setBoxModalOpen(false)}
@@ -4036,7 +5247,7 @@ export default function AdminPage() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-lg bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-6 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[92vh] overflow-y-auto"
+              className="relative w-full max-w-lg bg-white dark:bg-slate-900 border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-7 shadow-2xl text-slate-900 dark:text-white max-h-[90dvh] overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+1.5rem)]"
             >
               <button
                 type="button"

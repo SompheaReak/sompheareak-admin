@@ -82,6 +82,7 @@ interface StoreContextType {
 
   products: Product[];
   addProduct: (product: Omit<Product, "id">) => Product;
+  bulkAddProducts: (newProducts: Array<Omit<Product, "id"> & { id?: string }>, replaceMode?: boolean) => Promise<Product[]>;
   updateProduct: (id: string, updates: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
   resetProducts: () => void;
@@ -336,7 +337,7 @@ async function apiFetch(endpoint: string, options?: RequestInit) {
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currency, setCurrencyState] = useState<Currency>("USD");
   const [language, setLanguageState] = useState<Language>("en");
-  const [themeMode, setThemeModeState] = useState<"dark" | "light">("dark");
+  const [themeMode, setThemeModeState] = useState<"dark" | "light">("light");
   const [soundEnabled, setSoundEnabledState] = useState<boolean>(true);
 
   const [products, setProductsState] = useState<Product[]>(() => {
@@ -404,15 +405,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (savedLang && (savedLang === "en" || savedLang === "km")) setLanguageState(savedLang);
 
       const savedTheme = localStorage.getItem("somphea_theme") as "dark" | "light" | null;
-      if (savedTheme) {
-        setThemeModeState(savedTheme);
-        if (savedTheme === "dark") {
-          document.documentElement.classList.add("dark");
-        } else {
-          document.documentElement.classList.remove("dark");
-        }
-      } else {
+      if (savedTheme === "dark") {
+        setThemeModeState("dark");
         document.documentElement.classList.add("dark");
+      } else {
+        // Default to light mode for both customer front and admin panel
+        setThemeModeState("light");
+        document.documentElement.classList.remove("dark");
       }
 
       const savedSound = localStorage.getItem("somphea_sound");
@@ -487,15 +486,48 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
           neonGetKey<Category[]>("categories", CATEGORIES).then((cats) => {
             if (Array.isArray(cats) && cats.length > 0) {
-              setCategoriesState(cats);
-              safeSetItem("somphea_categories", JSON.stringify(cats));
+              const cleaned = cats.filter(
+                (c) => c.id !== "blind-box" && c.id !== "plushies" && c.id !== "tech-toys" && c.id !== "toy-universe"
+              );
+              const hasToy = cleaned.some((c) => c.id === "toy");
+              const finalCats = [...cleaned];
+              if (!hasToy) {
+                const minifigIdx = finalCats.findIndex((c) => c.id === "minifigure");
+                const toyCat = CATEGORIES.find((c) => c.id === "toy") || {
+                  id: "toy",
+                  name: "Toy",
+                  kh: "ប្រដាប់ក្មេងលេង Toy",
+                  en: "Toy",
+                  icon: "🪀",
+                  grad: "from-amber-400 to-orange-600",
+                  sort_order: 2,
+                  description: "Exciting toys, speed racers, collectible figures, and play sets.",
+                };
+                if (minifigIdx !== -1) {
+                  finalCats.splice(minifigIdx + 1, 0, toyCat);
+                } else {
+                  finalCats.push(toyCat);
+                }
+              }
+              setCategoriesState(finalCats);
+              safeSetItem("somphea_categories", JSON.stringify(finalCats));
             }
           });
 
           neonGetKey<CategoryBox[]>("categoryBoxes", DEFAULT_CATEGORY_BOXES).then((boxes) => {
             if (Array.isArray(boxes) && boxes.length > 0) {
-              setCategoryBoxesState(boxes);
-              safeSetItem("somphea_category_boxes", JSON.stringify(boxes));
+              const existingIds = new Set(boxes.map((b) => b.id));
+              const missingDefaults = DEFAULT_CATEGORY_BOXES.filter((b) => !existingIds.has(b.id));
+              const combined = missingDefaults.length > 0 ? [...boxes, ...missingDefaults] : boxes;
+              setCategoryBoxesState(combined);
+              safeSetItem("somphea_category_boxes", JSON.stringify(combined));
+              if (missingDefaults.length > 0) {
+                neonSetKey("categoryBoxes", combined);
+              }
+            } else {
+              setCategoryBoxesState(DEFAULT_CATEGORY_BOXES);
+              safeSetItem("somphea_category_boxes", JSON.stringify(DEFAULT_CATEGORY_BOXES));
+              neonSetKey("categoryBoxes", DEFAULT_CATEGORY_BOXES);
             }
           });
 
@@ -828,6 +860,69 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     return product;
   }, []);
+
+  const bulkAddProducts = useCallback(
+    async (
+      newProds: Array<Omit<Product, "id"> & { id?: string }>,
+      replaceMode: boolean = false
+    ): Promise<Product[]> => {
+      const processed: Product[] = newProds.map((np, idx) => {
+        const id = np.id || `toy-${Date.now()}-${idx}-${Math.floor(Math.random() * 1000)}`;
+        const code = np.code || `SPK-${Math.floor(1000 + Math.random() * 9000)}`;
+        return {
+          ...np,
+          id,
+          code,
+          name: (np.name || "Untitled Product").trim(),
+          nameKh: (np.nameKh || np.name || "ផលិតផល").trim(),
+          cat: np.cat || "minifigure",
+          price: Number(np.price) || 5.0,
+          discount: Number(np.discount) || 0,
+          stock: Number(np.stock) || 10,
+          pt: Number(np.pt) || 4,
+          image: np.image || "https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80",
+          images: Array.isArray(np.images) && np.images.length > 0 ? np.images : [np.image || "https://images.unsplash.com/photo-1589254065878-42c9da997008?auto=format&fit=crop&w=800&q=80"],
+          bio: np.bio || "Fun toy collectible.",
+          bioKh: np.bioKh || "ប្រដាប់ក្មេងលេងគុណភាពខ្ពស់។",
+          rarity: np.rarity || "Rare",
+          rating: np.rating || 5.0,
+          reviewsCount: np.reviewsCount || 1,
+          featured: np.featured !== undefined ? np.featured : true,
+          isNew: np.isNew !== undefined ? np.isNew : true,
+          free_delivery: np.free_delivery !== undefined ? np.free_delivery : true,
+          ageRecommendation: np.ageRecommendation || "Ages 4+",
+          dimensions: np.dimensions || "10cm x 8cm",
+        };
+      });
+
+      let finalProducts: Product[] = [];
+      setProductsState((prev) => {
+        if (replaceMode) {
+          finalProducts = processed;
+        } else {
+          // Prepend new products so they appear immediately at the top of the store!
+          const newCodes = new Set(processed.map((p) => p.code || p.id));
+          const remainingPrev = prev.filter((p) => !newCodes.has(p.code || p.id));
+          finalProducts = [...processed, ...remainingPrev];
+        }
+        safeSetItem("somphea_products", JSON.stringify(finalProducts));
+        neonSetKey("products", finalProducts);
+        return finalProducts;
+      });
+
+      // Sync to backend API
+      try {
+        await fetch("/api/products", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "bulk", products: processed, replaceMode }),
+        });
+      } catch {}
+
+      return finalProducts;
+    },
+    []
+  );
 
   const updateProduct = useCallback((id: string, updates: Partial<Product>) => {
     setProductsState((prev) => {
@@ -1485,6 +1580,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         removeVoucher,
         products,
         addProduct,
+        bulkAddProducts,
         updateProduct,
         deleteProduct,
         resetProducts,
